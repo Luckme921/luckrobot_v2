@@ -1,0 +1,54 @@
+slam_toolbox:
+  ros__parameters:
+
+    # ==========================================
+    # 1. 核心坐标系与话题配置 (与你的底层完美对齐)
+    # ==========================================
+    odom_frame: odom
+    map_frame: map
+    base_frame: base_footprint
+    scan_topic: /scan
+    # 注意：建图只用主雷达(A2M12)，因为它的 360 度测距最准且没有死角。
+
+    # ==========================================
+    # 2. 建图模式与图优化参数
+    # ==========================================
+    mode: mapping
+    use_scan_matching: true
+    use_scan_barycenter: true
+    minimum_travel_distance: 0.2      # 机器人走 0.2 米才插一个新节点 (平衡精度与算力)
+    minimum_travel_heading: 0.2       # 机器人转 0.2 弧度(约11度)插一个新节点
+    scan_buffer_size: 10
+    scan_buffer_maximum_scan_distance: 12.0 # A2M12 的最大有效距离
+    link_match_minimum_response_fine: 0.1  
+    link_scan_maximum_distance: 8.0
+    
+    # 图优化机制 (Loop Closure)
+    do_loop_closing: true             # 开启回环检测 (走到原处能自动修正累积误差)
+    loop_match_minimum_chain_size: 10
+    loop_match_maximum_variance_coarse: 3.0
+    loop_match_minimum_response_coarse: 0.35
+    loop_match_minimum_response_fine: 0.45
+
+    # ==========================================
+    # 3. 地图分辨率与大小
+    # ==========================================
+    resolution: 0.05                  # 地图分辨率：5 厘米一个格子 (标准室内精度)
+    max_laser_range: 16.0             # 雷达的物理最大量程
+    minimum_time_interval: 0.5        # 两次扫描处理的最短间隔时间
+
+    # 动态扩充地图的参数
+    transform_timeout: 0.2
+    tf_buffer_duration: 3.0
+    stack_capacity: 40000000          # 内存栈容量
+    enable_interactive_mode: true     # 允许 RViz 交互式修改地图
+
+    # 匹配器参数 (优化边缘毛刺)
+    distance_variance_penalty: 0.5
+    angle_variance_penalty: 1.0
+    fine_search_angle_offset: 0.00349
+    coarse_search_angle_offset: 0.349
+    coarse_angle_resolution: 0.0349
+    minimum_angle_penalty: 0.9
+    minimum_distance_penalty: 0.5
+    use_response_expansion: true
