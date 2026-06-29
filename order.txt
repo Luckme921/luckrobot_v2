@@ -1,0 +1,32 @@
+雷达
+ros2 launch rplidar_ros view_rplidar_a2m12_launch.py
+ros2 launch rplidar_ros rplidar_a2m12_launch.py
+雷达滤波360mm
+ros2 run laser_filters scan_to_scan_filter_chain --ros-args --params-file ~/ros2_ws/src/nav_config/box_filter.yaml
+相机
+ros2 launch orbbec_camera gemini_330_series.launch.py
+相机简化
+ros2 launch orbbec_camera gemini_330_series.launch.py \
+enable_point_cloud:=false \
+color_width:=640 \
+color_height:=480 \
+color_fps:=15 \
+depth_width:=640 \
+depth_height:=480 \
+depth_fps:=15 \
+depth_registration:=false
+相机scan话题
+ros2 run depthimage_to_laserscan depthimage_to_laserscan_node \
+--ros-args \
+-r depth:=/camera/depth/image_raw \
+-r depth_camera_info:=/camera/depth/camera_info \
+-r scan:=/scan_camera \
+-p scan_height:=10 \
+-p range_min:=0.15 \
+-p range_max:=3.0
+底盘驱动：
+ros2 run chassis_driver chassis_node
+imu数据包发布：
+ros2 run imu_driver imu_driver_node
+rviz机器人模型显示：
+ros2 launch my_robot_description display_robot.launch.py use_rviz:=true
