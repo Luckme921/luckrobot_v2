@@ -1,6 +1,6 @@
 import os
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, TimerAction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch.conditions import IfCondition
@@ -20,13 +20,13 @@ def generate_launch_description():
 
     desc_pkg_path = get_package_share_directory('my_robot_description')
     bringup_pkg_path = get_package_share_directory('my_robot_bringup')
+    nav2_pkg_path = get_package_share_directory('my_robot_navigation')
 
     # ==========================================
     # 2. 导入第三方与底层 Launch 文件
     # ==========================================
     
     # 2.1 启动机器人状态发布 
-    # 【修复】：即使不显式传参，由于顶层参数已改名为 use_rviz2，这里也不会再发生穿透双开！
     robot_description_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(desc_pkg_path, 'launch', 'display_robot.launch.py')
@@ -62,7 +62,7 @@ def generate_launch_description():
     # 3. 启动所有独立节点 (Nodes)
     # ==========================================
 
-    # 3.1 启动总控定制版 RViz2 (使用 my_robot_bringup/rviz_config/rviz2_config1.rviz)
+    # 3.1 启动总控定制版 RViz2
     rviz_config_path = os.path.join(bringup_pkg_path, 'rviz_config', 'rviz2_config1.rviz')
     rviz_node = Node(
         package='rviz2',
@@ -118,9 +118,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    # ==========================================
-    # 🌟 3.6 启动核心 EKF 里程计融合节点 🌟
-    # ==========================================
+    # 3.6 核心 EKF 里程计融合节点
     ekf_config_path = os.path.join(bringup_pkg_path, 'config', 'ekf.yaml')
     ekf_node = Node(
         package='robot_localization',
@@ -131,7 +129,26 @@ def generate_launch_description():
     )
 
     # ==========================================
-    # 4. 返回完整启动描述符
+    # 🌟 4. 延时 5 秒启动 Nav2 导航框架 🌟
+    # 避免 Nav2 抢跑导致找不到 /map 或 /odom TF 的报错
+    # ==========================================
+    nav2_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(nav2_pkg_path, 'launch', 'navigation.launch.py')
+        ),
+        launch_arguments={
+            'use_sim_time': 'false',
+            'log_level': 'info'
+        }.items()
+    )
+    
+    delayed_nav2_launch = TimerAction(
+        period=5.0, # 延时 5 秒，让底层传感器和 EKF 先飞一会儿
+        actions=[nav2_launch]
+    )
+
+    # ==========================================
+    # 5. 返回完整启动描述符
     # ==========================================
     return LaunchDescription([
         use_rviz_arg,
@@ -142,6 +159,7 @@ def generate_launch_description():
         chassis_node,
         imu_node,
         laser_filter_node,
-        depth_to_laser_node,
-        ekf_node   # <--- 正式加载 EKF
+        depth_to_laser_node, # <--- 之前漏掉的就是这个节点！现在补回来了
+        ekf_node,
+        delayed_nav2_launch
     ])

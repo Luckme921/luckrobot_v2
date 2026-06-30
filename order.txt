@@ -36,5 +36,8 @@ ros2 launch my_robot_mapping slam.launch.py
 地图保存：
 ros2 run nav2_map_server map_saver_cli -f ~/ros2_ws/my_room_map
 
+导航启动
+ros2 launch my_robot_navigation navigation.launch.py
+
 总节点启动
 ros2 launch my_robot_bringup robot_bringup.launch.py
