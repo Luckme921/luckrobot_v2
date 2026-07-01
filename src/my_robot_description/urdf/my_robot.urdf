@@ -1,7 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- 工业级 AMR 机器人核心描述文件 -->
-<!-- 终极优化版：雷达、相机、底盘碰撞全部采用原生几何体，彻底根治 RViz2 卡死，极大降低导航 CPU 负载 -->
-<!-- [更新]: 修正了真实雷达物理安装与 CAD 模型绕 Z 轴相差 180 度的偏差 -->
+<!-- 终极优化版：全局采用纯数学几何体(无任何 STL 模型)，极致压榨性能，彻底解决 SSH 下的 RViz 卡顿 -->
 <robot name="my_awesome_robot" xmlns:xacro="http://ros.org/wiki/xacro">
 
   <!-- ======================================================== -->
@@ -18,25 +17,26 @@
   </joint>
 
   <!-- ======================================================== -->
-  <!-- 2. 小车主体 base_link -->
+  <!-- 2. 小车主体 base_link (直径350mm, 高120mm 的圆柱体) -->
   <!-- ======================================================== -->
   <link name="base_link">
-    <!-- 外观 (Visual) 继续使用你瘦身过的 STL，保证 Rviz 里看到的是你的真车轮廓 -->
     <visual>
-      <origin xyz="0 0 0" rpy="0 0 0" />
+      <!-- Z轴抬高 0.06m (120mm的一半)，使得圆柱体底部正好落在 0 的位置 -->
+      <origin xyz="0 0 0.06" rpy="0 0 0" />
       <geometry>
-        <mesh filename="package://my_robot_description/meshes/base_link.STL" />
+        <!-- 半径 175mm (0.175m)，高度 120mm (0.12m) -->
+        <cylinder radius="0.175" length="0.12" />
       </geometry>
       <material name="white">
-        <color rgba="1 1 1 1" />
+        <!-- 设为浅灰色，方便在 RViz 中观察 -->
+        <color rgba="0.8 0.8 0.8 1" />
       </material>
     </visual>
-    <!-- 🌟 碰撞 (Collision) 替换为简单的包围盒，极大提升 Nav2 运算速度 -->
-    <!-- 注意：这里的长宽(0.3 0.2)是估算值，请根据实车尺寸自行微调 -->
+    <!-- 碰撞体积与外观完全一致，Nav2 算力开销降到最低 -->
     <collision>
-      <origin xyz="0 0 0.05" rpy="0 0 0" />
+      <origin xyz="0 0 0.06" rpy="0 0 0" />
       <geometry>
-        <box size="0.3 0.2 0.1" />
+        <cylinder radius="0.175" length="0.12" />
       </geometry>
     </collision>
   </link>
@@ -47,7 +47,6 @@
   <link name="camera_color_screw_frame">
     <!-- 外观与碰撞均使用真实尺寸的长方体 (27.7mm x 124mm x 29mm) -->
     <visual>
-      <!-- Z 轴抬高长方体高度的一半 (0.029/2 = 0.0145)，使得长方体底面正好落在螺丝孔上 -->
       <origin xyz="0 0 0.0145" rpy="0 0 0" />
       <geometry>
         <box size="0.0277 0.124 0.029" />
@@ -65,8 +64,7 @@
   </link>
 
   <joint name="camera_color_screw_joint" type="fixed">
-    <!-- SW 导出的倒装姿态 (Pitch = 180度) -->
-    <!-- <origin xyz="0.15205 0 0.13933" rpy="3.1416 0 0" /> -->
+    <!-- SW 导出的倒装姿态及你最新精调的位姿补偿 -->
     <origin xyz="0.1434 -0.0002 0.13933" rpy="3.1416 0 -0.0467" />
     <parent link="base_link" />
     <child link="camera_color_screw_frame" />
@@ -75,10 +73,8 @@
   <!-- ======================================================== -->
   <!-- 🌟 4. 终极桥接魔法：连接物理螺丝孔与相机光学驱动源头 -->
   <!-- ======================================================== -->
-  <!-- 这是一个不可见的虚拟节点，作为 orbbec_camera 驱动接管的锚点 -->
   <link name="camera_link"/>
 
-  <!-- 空间逆推：从小车测量的螺纹孔位置，反向推导回相机的“深度镜头核心” -->
   <joint name="screw_to_camera_link_joint" type="fixed">
     <origin xyz="0.011715 0.0475 0.014311" rpy="0 0 0" />
     <parent link="camera_color_screw_frame" />
@@ -88,9 +84,7 @@
   <!-- ======================================================== -->
   <!-- 5. 激光雷达 A2M12 (倒装, 极简圆柱体优化) -->
   <!-- ======================================================== -->
-  <!-- 注意：这里的 Link 名字已经改成了 laser，省去了 launch 里传参的麻烦 -->
   <link name="laser">
-    <!-- 彻底弃用巨型 STL，外观与碰撞均使用数学圆柱体 (半径 38mm, 高 41mm) -->
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
@@ -109,26 +103,32 @@
   </link>
 
   <joint name="laser_joint" type="fixed">
-    <!-- ✅ 修改点：原来是 3.1416 0 -3.1416，现将 Z 轴旋转 180 度，-3.1416 + 3.1416 = 0 -->
+    <!-- 将 Z 轴旋转 180 度修正模型误差 -->
     <origin xyz="0 0 0.096" rpy="3.1416 0 0" />
     <parent link="base_link" />
     <child link="laser" />
   </joint>
 
   <!-- ======================================================== -->
-  <!-- 6. IMU 模块 (倒装) -->
+  <!-- 6. IMU 模块 (倒装, 长8cm宽5cm高3cm的长方体盒子) -->
   <!-- ======================================================== -->
   <link name="imu_link">
     <visual>
+      <!-- 长方体中心对齐 joint，无需偏移 -->
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <!-- IMU 模型通常只有几十个面 (几KB)，直接保留 STL 无妨 -->
-        <mesh filename="package://my_robot_description/meshes/imu_link.STL" />
+        <box size="0.08 0.05 0.03" />
       </geometry>
       <material name="blue">
         <color rgba="0.0 0.5 0.8 1" />
       </material>
     </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <box size="0.08 0.05 0.03" />
+      </geometry>
+    </collision>
   </link>
 
   <joint name="imu_joint" type="fixed">

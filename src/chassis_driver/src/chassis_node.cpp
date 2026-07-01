@@ -59,6 +59,7 @@ const char* SERIAL_PORT = "/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_ABADW8KY-i
 const int BAUDRATE = B115200;
 
 // ==================== 2. 运动学静态参数 ====================
+// 🌟 恢复真实的物理轮径
 constexpr double WHEEL_DIAMETER_MM = 100.0;
 constexpr double WHEEL_BASE_MM = 269.0; 
 constexpr double WHEEL_CIRCUMFERENCE_CM = M_PI * (WHEEL_DIAMETER_MM / 10.0); // 31.4159 cm
@@ -179,8 +180,12 @@ public:
         feedback_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>("wheel_feedback", 10);
 
         // ==================== [新增]: 注册里程计发布器 ====================
-        // 注意：为配合 robot_localization EKF 融合，我们只发布话题，不发布 TF
-        odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/wheel/odom", 10);
+        // 🌟 工业级 QoS 调优：保持与 EKF 兼容的 Reliable，但将缓冲队列扩大至 50
+        // 彻底解决 100Hz 丢包造成的积分漏算现象！
+        rclcpp::QoS custom_qos(50);
+        custom_qos.reliable();
+        custom_qos.keep_last(50);
+        odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/wheel/odom", custom_qos);
         // ==================================================================
 
         if (!serial_init()) {

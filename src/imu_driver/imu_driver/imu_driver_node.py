@@ -102,6 +102,11 @@ class IMUDriverNode(Node):
         msg.angular_velocity.y = self.gy
         msg.angular_velocity.z = self.gz
         
+        if abs(self.gz) < 0.015:
+            msg.angular_velocity.z = 0.0
+        else:
+            msg.angular_velocity.z = self.gz
+
         # 4. 填入线加速度 (m/s^2)
         msg.linear_acceleration.x = self.ax
         msg.linear_acceleration.y = self.ay
