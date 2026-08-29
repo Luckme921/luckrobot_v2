@@ -62,7 +62,7 @@ def generate_launch_description():
     # ==========================================
 
     # 3.1 启动总控定制版 RViz2
-    rviz_config_path = os.path.join(bringup_pkg_path, 'rviz_config', 'rviz2_config2.rviz')
+    rviz_config_path = os.path.join(bringup_pkg_path, 'rviz_config', 'rviz2_config1.rviz')
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',
@@ -106,7 +106,8 @@ def generate_launch_description():
         remappings=[
             ('depth', '/camera/depth/image_raw'),
             ('depth_camera_info', '/camera/depth/camera_info'),
-            ('scan', '/scan_camera')
+            # 🌟 核心修改 1：不直接发给 Nav2，而是输出为 raw 原始数据
+            ('scan', '/scan_camera_raw') 
         ],
         parameters=[{
             'scan_height': 10,
@@ -117,7 +118,22 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 3.6 核心 EKF 里程计融合节点
+    # 3.6 🌟 新增：相机的孤立点雷达滤波器 (剔除地面高反光噪点)
+    camera_filter_yaml = os.path.expanduser('~/ros2_ws/src/nav_config/camera_filter.yaml')
+    camera_filter_node = Node(
+        package='laser_filters',
+        executable='scan_to_scan_filter_chain',
+        name='camera_scan_filter_chain',
+        parameters=[camera_filter_yaml],
+        remappings=[
+            # 🌟 核心修改 2：接收 raw 数据，过滤后发给正式的 /scan_camera 话题
+            ('scan', '/scan_camera_raw'),      
+            ('scan_filtered', '/scan_camera')  
+        ],
+        output='screen'
+    )
+
+    # 3.7 核心 EKF 里程计融合节点
     ekf_config_path = os.path.join(bringup_pkg_path, 'config', 'ekf.yaml')
     ekf_node = Node(
         package='robot_localization',
@@ -140,5 +156,6 @@ def generate_launch_description():
         imu_node,
         laser_filter_node,
         depth_to_laser_node,
+        camera_filter_node, # 🌟 挂载相机专属强力去噪点滤波器
         ekf_node
     ])

@@ -41,7 +41,7 @@ def generate_launch_description():
         )
     )
 
-    # 2.3 启动 Gemini 相机 (极简模式，只发深度图，节约算力)
+    # 2.3 启动 Gemini 相机
     camera_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(get_package_share_directory('orbbec_camera'), 'launch', 'gemini_330_series.launch.py')
@@ -62,7 +62,6 @@ def generate_launch_description():
     # 3. 启动所有独立节点 (Nodes)
     # ==========================================
 
-    # 3.1 启动总控定制版 RViz2
     rviz_config_path = os.path.join(bringup_pkg_path, 'rviz_config', 'rviz2_config1.rviz')
     rviz_node = Node(
         package='rviz2',
@@ -73,7 +72,6 @@ def generate_launch_description():
         condition=IfCondition(use_rviz)
     )
 
-    # 3.2 底盘驱动节点 (包含原始纯轮式 Odom 数据发布，不发布 TF)
     chassis_node = Node(
         package='chassis_driver',
         executable='chassis_node',
@@ -81,7 +79,6 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 3.3 IMU 驱动节点 (发布高质量姿态数据)
     imu_node = Node(
         package='imu_driver',
         executable='imu_driver_node',
@@ -89,7 +86,7 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 3.4 雷达盒子滤波节点 (剔除车身内部无效点云)
+    # 3.4 主雷达盒子滤波 (剔除车身内部)
     box_filter_yaml = os.path.expanduser('~/ros2_ws/src/nav_config/box_filter.yaml')
     laser_filter_node = Node(
         package='laser_filters',
@@ -99,7 +96,8 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 3.5 相机深度图转伪激光雷达节点 (严格挂载于相机的深度光学帧上)
+    # 3.5 相机深度图转伪激光雷达节点
+    # 🌟 修复流向：将原本直接给 Nav2 的 /scan_camera 改为发给中间商 /scan_camera_raw
     depth_to_laser_node = Node(
         package='depthimage_to_laserscan',
         executable='depthimage_to_laserscan_node',
@@ -107,7 +105,7 @@ def generate_launch_description():
         remappings=[
             ('depth', '/camera/depth/image_raw'),
             ('depth_camera_info', '/camera/depth/camera_info'),
-            ('scan', '/scan_camera')
+            ('scan', '/scan_camera_raw') # 🌟 输出原始未滤波数据
         ],
         parameters=[{
             'scan_height': 10,
@@ -118,7 +116,20 @@ def generate_launch_description():
         output='screen'
     )
 
-    # 3.6 核心 EKF 里程计融合节点
+    # 3.6 🌟 新增：相机的孤立点雷达滤波器 (剔除地面高反光噪点)
+    camera_filter_yaml = os.path.expanduser('~/ros2_ws/src/nav_config/camera_filter.yaml')
+    camera_filter_node = Node(
+        package='laser_filters',
+        executable='scan_to_scan_filter_chain',
+        name='camera_scan_filter_chain',
+        parameters=[camera_filter_yaml],
+        remappings=[
+            ('scan', '/scan_camera_raw'),      # 🌟 接收原始数据
+            ('scan_filtered', '/scan_camera')  # 🌟 输出过滤后、极其干净的数据给 Nav2！
+        ],
+        output='screen'
+    )
+
     ekf_config_path = os.path.join(bringup_pkg_path, 'config', 'ekf.yaml')
     ekf_node = Node(
         package='robot_localization',
@@ -128,10 +139,6 @@ def generate_launch_description():
         parameters=[ekf_config_path]
     )
 
-    # ==========================================
-    # 🌟 4. 延时 5 秒启动 Nav2 导航框架 🌟
-    # 避免 Nav2 抢跑导致找不到 /map 或 /odom TF 的报错
-    # ==========================================
     nav2_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             os.path.join(nav2_pkg_path, 'launch', 'navigation.launch.py')
@@ -143,13 +150,10 @@ def generate_launch_description():
     )
     
     delayed_nav2_launch = TimerAction(
-        period=5.0, # 延时 5 秒，让底层传感器和 EKF 先飞一会儿
+        period=5.0,
         actions=[nav2_launch]
     )
 
-    # ==========================================
-    # 5. 返回完整启动描述符
-    # ==========================================
     return LaunchDescription([
         use_rviz_arg,
         robot_description_launch,
@@ -159,7 +163,8 @@ def generate_launch_description():
         chassis_node,
         imu_node,
         laser_filter_node,
-        depth_to_laser_node, # <--- 之前漏掉的就是这个节点！现在补回来了
+        depth_to_laser_node,
+        camera_filter_node, # 🌟 挂载相机专属滤波器
         ekf_node,
         delayed_nav2_launch
     ])

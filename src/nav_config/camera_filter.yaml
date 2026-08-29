@@ -1,0 +1,10 @@
+scan_filter_chain:
+  ros__parameters:
+    filter1:
+      name: radius_outlier
+      type: laser_filters/LaserScanRadiusOutlierFilter
+      params:
+        # 查找半径：以当前点为圆心，向外扩展 0.3 米 
+        radius: 0.3
+        # 最少邻居数：在这个圆里，如果找不到至少 3 个其他点，这个点就被认定为孤立的噪点并剔除
+        min_neighbors: 3
