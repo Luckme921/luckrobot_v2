@@ -21,22 +21,24 @@ LASER_X = 0.0
 LASER_Y = 0.0
 LASER_ROLL_PI = True 
 
-# 这里的基准值已经换成了你 URDF 里最新的正确数据
-CAM_SCREW_X = 0.1454
-CAM_SCREW_Y = -0.0103
-CAM_SCREW_YAW = -0.0394  # 刚才算出的 -0.0394 弧度
+# 与 src/my_robot_description/urdf/my_robot.urdf 保持一致。
+CAM_SCREW_X = 0.1434
+CAM_SCREW_Y = -0.0002
+CAM_SCREW_YAW = -0.0467
 CAM_SCREW_ROLL_PI = True 
 
 CAM_OPTICAL_X = 0.011715
 CAM_OPTICAL_Y = 0.0475
 
+# 单帧 ICP 很容易受墙面高度差、玻璃/反光和稀疏点影响。
+# 一次运行自动采集多组独立帧，使用中位数给出诊断结论。
+SAMPLE_COUNT = 10
+MAX_ATTEMPTS = 30
+SAMPLE_INTERVAL = 1.0
+
 def scan_to_base_link(msg, is_lidar):
-    angles = np.arange(msg.angle_min, msg.angle_max, msg.angle_increment)
     ranges = np.array(msg.ranges)
-    
-    min_len = min(len(angles), len(ranges))
-    angles = angles[:min_len]
-    ranges = ranges[:min_len]
+    angles = msg.angle_min + np.arange(len(ranges)) * msg.angle_increment
 
     valid = (ranges > msg.range_min) & (ranges < msg.range_max) & ~np.isnan(ranges) & ~np.isinf(ranges)
     ranges = ranges[valid]
@@ -71,6 +73,9 @@ def scan_to_base_link(msg, is_lidar):
     return np.column_stack((x, y))
 
 def compute_icp(src, dst, max_iterations=50, tolerance=1e-6):
+    if len(src) < 10 or len(dst) < 10:
+        return None, None, None
+
     src_points = np.copy(src)
     total_R = np.eye(2)
     total_t = np.zeros(2)
@@ -117,10 +122,16 @@ class AutoCalibratorNode(Node):
         super().__init__('auto_icp_calibrator')
         self.lidar = None
         self.cam = None
-        self.get_logger().info("⏳ 正在监听 /scan 和 /scan_camera 话题...")
-        self.sub_l = self.create_subscription(LaserScan, '/scan', self.lidar_cb, 10)
+        self.last_pair_stamp = None
+        self.results = []
+        self.attempts = 0
+        self.get_logger().info("⏳ 正在监听 /scan_filtered 和 /scan_camera 话题...")
+        self.get_logger().info(
+            f"将自动采集 {SAMPLE_COUNT} 组静止数据；请保持机器人和周围物体不动，并关闭 RViz。"
+        )
+        self.sub_l = self.create_subscription(LaserScan, '/scan_filtered', self.lidar_cb, 10)
         self.sub_c = self.create_subscription(LaserScan, '/scan_camera', self.cam_cb, 10)
-        self.timer = self.create_timer(1.0, self.perform_calibration)
+        self.timer = self.create_timer(SAMPLE_INTERVAL, self.perform_calibration)
         
     def lidar_cb(self, msg):
         self.lidar = msg
@@ -129,36 +140,82 @@ class AutoCalibratorNode(Node):
         self.cam = msg
         
     def perform_calibration(self):
-        if self.lidar and self.cam:
-            self.timer.cancel()
-            self.get_logger().info("✅ 成功截获静止数据帧！开始验证残余标定误差...")
-            
-            dst_pts = scan_to_base_link(self.lidar, is_lidar=True)
-            src_pts = scan_to_base_link(self.cam, is_lidar=False)
-            
-            dx, dy, dyaw = compute_icp(src_pts, dst_pts)
-            
-            if dx is None:
-                self.get_logger().error("❌ ICP 无法收敛，请检查机器人是否对准墙角！")
-                sys.exit(1)
-                
-            self.get_logger().info("\n\n" + "="*60)
-            self.get_logger().info("🎉 当前标定已达到极高精度！检测到的残余公差（应接近于0）：")
-            self.get_logger().info(f"X轴 残余误差: {dx:.4f} 米")
-            self.get_logger().info(f"Y轴 残余误差: {dy:.4f} 米")
-            self.get_logger().info(f"Yaw 残余误差: {math.degrees(dyaw):.2f} 度")
-            self.get_logger().info("="*60)
-            
-            # 由于已经是校准后的二次验证，我们给出叠加上残余误差的理论最优值
-            new_x = CAM_SCREW_X * math.cos(dyaw) - CAM_SCREW_Y * math.sin(dyaw) + dx
-            new_y = CAM_SCREW_X * math.sin(dyaw) + CAM_SCREW_Y * math.cos(dyaw) + dy
-            new_yaw = CAM_SCREW_YAW + dyaw
-            
-            self.get_logger().info("👉 如果追求极致（其实大可不必），你可以把 URDF 里的 origin 刷新为下面这行：")
-            self.get_logger().info(f'\n    <origin xyz="{new_x:.4f} {new_y:.4f} 0.13933" rpy="3.1416 0 {new_yaw:.4f}" />\n')
-            self.get_logger().info("="*60)
-            
-            sys.exit(0)
+        if self.lidar is None or self.cam is None:
+            return
+
+        pair_stamp = (
+            self.lidar.header.stamp.sec,
+            self.lidar.header.stamp.nanosec,
+            self.cam.header.stamp.sec,
+            self.cam.header.stamp.nanosec,
+        )
+        if pair_stamp == self.last_pair_stamp:
+            return
+        self.last_pair_stamp = pair_stamp
+        self.attempts += 1
+
+        dst_pts = scan_to_base_link(self.lidar, is_lidar=True)
+        src_pts = scan_to_base_link(self.cam, is_lidar=False)
+        dx, dy, dyaw = compute_icp(src_pts, dst_pts)
+
+        if dx is None:
+            self.get_logger().warning(
+                f"第 {self.attempts} 次 ICP 未收敛，等待下一组数据。"
+            )
+            if self.attempts >= MAX_ATTEMPTS:
+                self.timer.cancel()
+                self.get_logger().error("有效帧不足：请让相机和雷达同时看到墙角后重试。")
+                raise SystemExit(1)
+            return
+
+        self.results.append((dx, dy, math.degrees(dyaw)))
+        self.get_logger().info(
+            f"样本 {len(self.results)}/{SAMPLE_COUNT}: "
+            f"dx={dx:+.4f} m, dy={dy:+.4f} m, dyaw={math.degrees(dyaw):+.2f} deg"
+        )
+
+        if len(self.results) < SAMPLE_COUNT:
+            return
+
+        self.timer.cancel()
+        values = np.asarray(self.results)
+        medians = np.median(values, axis=0)
+        spreads = np.std(values, axis=0)
+        dx_med, dy_med, yaw_med = medians
+        translation = math.hypot(dx_med, dy_med)
+
+        stable = max(spreads[0], spreads[1]) <= 0.015 and spreads[2] <= 0.50
+        if translation <= 0.020 and abs(yaw_med) <= 0.50:
+            grade = "PASS"
+            conclusion = "残差很小，当前外参可保留。"
+        elif translation <= 0.050 and abs(yaw_med) <= 1.00:
+            grade = "WARN"
+            conclusion = "存在小偏差，对当前低速 Nav2 通常可用，但需换场景复测。"
+        else:
+            grade = "FAIL"
+            conclusion = "偏差较大，需要检查 TF、安装尺寸和扫描高度。"
+
+        self.get_logger().info("\n" + "=" * 64)
+        self.get_logger().info(f"多帧 ICP 诊断: {grade}")
+        self.get_logger().info(
+            f"中位残差: X={dx_med:+.4f} m, Y={dy_med:+.4f} m, "
+            f"Yaw={yaw_med:+.2f} deg, 平移合量={translation:.4f} m"
+        )
+        self.get_logger().info(
+            f"样本标准差: X={spreads[0]:.4f} m, Y={spreads[1]:.4f} m, "
+            f"Yaw={spreads[2]:.2f} deg"
+        )
+        self.get_logger().info(f"样本稳定性: {'合格' if stable else '不合格'}")
+        self.get_logger().info(conclusion)
+        if not stable:
+            self.get_logger().warning("场景约束不足或噪声较大，本次残差不能用于修改 URDF。")
+        else:
+            self.get_logger().warning(
+                "本工具只做诊断，不会生成可直接替换的 URDF。"
+                "只有在第二个不同墙角得到同方向、近似数值后才应进入外参调整。"
+            )
+        self.get_logger().info("=" * 64)
+        raise SystemExit(0)
 
 def main():
     rclpy.init()

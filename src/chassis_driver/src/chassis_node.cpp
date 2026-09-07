@@ -12,9 +12,9 @@
  * - [左轮 / LEFT_WHEEL]:  ID = 0x04。正常安装。
  * * * 2. 核心控制突破：软硬协同 Velocity Smoother & 防积分饱和 (Anti-Windup):
  * - 【硬件 Bug 回避】: 底层驱动固件在接收 `0 RPM` 指令时，会无视内部斜坡寄存器直接瞬间抱死。
- * - 【宏观软件接管】: 彻底弃用硬件减速器。在 ROS 2 层引入 100Hz 微积分速度平滑算法 (Velocity Smoother)。
- * 停车时，软件层以 `MAX_DECEL_X` 的减速度将指令 (如 40->38->...->0) 逐步下发。
- * - 【微观硬件插值】: 指令帧 `DATA[6] = 0x32 (5ms/RPM)`，仅用于让硬件填补软件两次 10ms 调度间的电信号阶梯缝隙。
+ * - 【宏观软件接管】: 彻底弃用硬件减速器。在 ROS 2 层引入基于真实时间步长的速度平滑算法 (Velocity Smoother)。
+ * 停车时，软件层以 `MAX_DECEL_X` 的减速度将指令逐步下发；串口读写导致循环降频时减速度仍保持不变。
+ * - 【微观硬件插值】: 指令帧 `DATA[6] = 0x32 (5ms/RPM)`，仅用于填补软件相邻两次调度间的电信号阶梯缝隙。
  * - 【Anti-Windup 限幅】: 接收 `cmd_vel` 后，在平滑器介入前根据电机极速 (300 RPM) 进行硬性截断 (Clamp)，
  * 彻底杜绝上位机异常大数值指令导致的“积分饱和”与“刹车卡死/延迟”现象。
  * * * 3. RS485 通信协议 (115200, 8N1, 一问一答半双工):
@@ -52,6 +52,8 @@
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <cstring>
+#include <utility>
 
 // ==================== 1. 硬件连接配置 ====================
 // 使用 udev 的 by-id 路径，防止 Ubuntu 重启后 /dev/ttyUSB* 乱序导致失联
@@ -84,12 +86,13 @@ const uint8_t CRC8_POLY_REV = 0x8C;   // MAXIM CRC8 反转多项式
 // ==================== 5. 软件平滑器 (Velocity Smoother) 参数 ====================
 // 决定机器人的驾驶手感：起步猛如虎，刹车稳如狗
 constexpr double MAX_ACCEL_X = 1.2;  // 线起步加速度 (m/s^2)
-constexpr double MAX_DECEL_X = 0.25; // 线刹车减速度 (m/s^2) - 0.2m/s 刹停约需 0.8s，极其优雅
+constexpr double MAX_DECEL_X = 0.50; // 线刹车减速度 (m/s^2)，与 Nav2 velocity_smoother 保持一致
 constexpr double MAX_ACCEL_Z = 3.0;  // 角起步加速度 (rad/s^2)
 constexpr double MAX_DECEL_Z = 1.5;  // 角刹车减速度 (rad/s^2)
 
 // ==================== 6. 节点调度高可用参数 ====================
-constexpr int CONTROL_FREQ = 100;         // ROS2 核心循环频率 100Hz (dt = 0.01s)
+constexpr int CONTROL_FREQ = 100;         // 期望调度频率；积分必须使用真实 dt，不能假定始终达到 100Hz
+constexpr double MAX_CONTROL_DT = 0.10;   // 串口重连/调度阻塞后的单次积分时间上限
 constexpr double CMD_VEL_TIMEOUT = 0.2;   // 看门狗保护超时阈值 (秒)
 constexpr int RESPONSE_TIMEOUT_MS = 10;   // 串口 select 非阻塞最长等待时长
 constexpr int RS485_DELAY_US = 300;       // RS485 总线半双工读写切换物理死区时间
@@ -195,9 +198,14 @@ public:
             RCLCPP_INFO(this->get_logger(), "当前硬件极速限幅: RPM=±%d | V_max=%.2f m/s | W_max=%.2f rad/s", 
                         RPM_LIMIT, MAX_PHYSICAL_LIN_VEL, MAX_PHYSICAL_ANG_VEL);
         }
+        RCLCPP_INFO(
+            this->get_logger(),
+            "底盘平滑器: real-dt | linear decel=%.2f m/s^2 | angular decel=%.2f rad/s^2",
+            MAX_DECEL_X, MAX_DECEL_Z);
 
         last_cmd_vel_time_ = this->now();
         last_odom_time_ = this->now(); // 记录初次里程计时间
+        last_control_time_ = std::chrono::steady_clock::now();
         control_timer_ = this->create_wall_timer(
             std::chrono::milliseconds(1000 / CONTROL_FREQ),
             std::bind(&ChassisNode::control_loop, this));
@@ -245,7 +253,11 @@ private:
 
         struct termios tty;
         memset(&tty, 0, sizeof(tty));
-        if (tcgetattr(g_serial_fd, &tty) != 0) return false;
+        if (tcgetattr(g_serial_fd, &tty) != 0) {
+            close(g_serial_fd);
+            g_serial_fd = -1;
+            return false;
+        }
 
         cfsetispeed(&tty, BAUDRATE);
         cfsetospeed(&tty, BAUDRATE);
@@ -260,7 +272,11 @@ private:
         tty.c_cc[VMIN] = 0;
         tty.c_cc[VTIME] = 0;
 
-        if (tcsetattr(g_serial_fd, TCSANOW, &tty) != 0) return false;
+        if (tcsetattr(g_serial_fd, TCSANOW, &tty) != 0) {
+            close(g_serial_fd);
+            g_serial_fd = -1;
+            return false;
+        }
         clear_serial_buffer();
         return true;
     }
@@ -395,7 +411,7 @@ private:
         double dt = (current_time - last_odom_time_).seconds();
         if (dt <= 0.0) return;
 
-        // 1. 获取两次调度间(10ms)轮子转过的增量弧度
+        // 1. 获取相邻两次实际调度间轮子转过的增量弧度
         double d_left_rad = current_left_rad - last_odom_left_rad_;
         double d_right_rad = current_right_rad - last_odom_right_rad_;
 
@@ -460,7 +476,7 @@ private:
     // =====================================================================
 
     /**
-     * @brief 100Hz ROS 2 控制闭环守护线程
+     * @brief ROS 2 控制闭环守护线程（100Hz 期望调度，真实 dt 积分）
      */
     void control_loop() {
         if (!g_node_running.load() || !rclcpp::ok()) return;
@@ -502,10 +518,13 @@ private:
         }
 
         // =========================================================================
-        // 【核心平滑中枢】：100Hz 软件微分速度限制器 (Velocity Smoother)
-        // 抛弃硬件一刀切控制。通过微步长逼近目标速度，完美兼容起步猛烈与驻停轻柔。
+        // 【核心平滑中枢】：基于真实时间步长的软件速度限制器 (Velocity Smoother)
+        // 串口一问一答会让实际循环低于 100Hz；固定使用 0.01s 会把真实减速度缩小数倍。
         // =========================================================================
-        double dt = 1.0 / CONTROL_FREQ;
+        const auto control_now = std::chrono::steady_clock::now();
+        double dt = std::chrono::duration<double>(control_now - last_control_time_).count();
+        last_control_time_ = control_now;
+        dt = std::clamp(dt, 0.001, MAX_CONTROL_DT);
 
         // 1. 线速度平滑推演
         if (target_x != cur_lin_x_) {
@@ -585,6 +604,7 @@ private:
     std::mutex vel_mutex_;
     double target_linear_x_, target_angular_z_;
     rclcpp::Time last_cmd_vel_time_;
+    std::chrono::steady_clock::time_point last_control_time_;
     bool watchdog_tripped_;
 
     // 软件平滑器积分状态量 (历史状态记录)

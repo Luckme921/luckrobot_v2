@@ -1,8 +1,8 @@
 雷达
 ros2 launch rplidar_ros view_rplidar_a2m12_launch.py
 ros2 launch rplidar_ros rplidar_a2m12_launch.py
-雷达滤波360mm
-ros2 run laser_filters scan_to_scan_filter_chain --ros-args --params-file ~/ros2_ws/src/nav_config/box_filter.yaml
+雷达滤波360mm（旧手动调试方式）
+ros2 run laser_filters scan_to_scan_filter_chain --ros-args --params-file $(ros2 pkg prefix my_robot_bringup)/share/my_robot_bringup/config/box_filter.yaml
 相机
 ros2 launch orbbec_camera gemini_330_series.launch.py
 相机简化
@@ -20,10 +20,12 @@ ros2 run depthimage_to_laserscan depthimage_to_laserscan_node \
 --ros-args \
 -r depth:=/camera/depth/image_raw \
 -r depth_camera_info:=/camera/depth/camera_info \
--r scan:=/scan_camera \
+-r scan:=/scan_camera_raw \
 -p scan_height:=10 \
 -p range_min:=0.15 \
 -p range_max:=3.0
+相机scan去孤立点（旧手动调试方式）
+ros2 run laser_filters scan_to_scan_filter_chain --ros-args -r __node:=camera_scan_filter_chain -r scan:=/scan_camera_raw -r scan_filtered:=/scan_camera --params-file $(ros2 pkg prefix my_robot_bringup)/share/my_robot_bringup/config/camera_filter.yaml
 底盘驱动：
 ros2 run chassis_driver chassis_node
 imu数据包发布：
@@ -45,3 +47,24 @@ ros2 launch my_robot_bringup robot_bringup.launch.py
 
 sudo iwconfig wlP1p1s0 power off
 
+==========================================
+推荐的一键入口（2026-08 导航可靠性升级）
+==========================================
+开荒/继续建图：
+ros2 launch my_robot_bringup smart_navigation.launch.py mode:=mapping
+
+自动探索（另开终端）：
+ros2 launch my_robot_mapping auto_explore.launch.py
+
+同时保存 posegraph 与栅格地图：
+mkdir -p ~/ros2_ws/maps
+ros2 service call /slam_toolbox/serialize_map slam_toolbox/srv/SerializePoseGraph "{filename: '/home/nvidia/ros2_ws/maps/my_room_map'}"
+ros2 run nav2_map_server map_saver_cli -f /home/nvidia/ros2_ws/maps/my_room_map
+
+日常 posegraph 定位导航（不启动 AMCL）：
+ros2 launch my_robot_bringup smart_navigation.launch.py mode:=localization posegraph:=/home/nvidia/ros2_ws/maps/my_room_map
+
+加载旧 posegraph 并永久更新地图：
+ros2 launch my_robot_bringup smart_navigation.launch.py mode:=lifelong posegraph:=/home/nvidia/ros2_ws/maps/my_room_map
+
+完整上车验收步骤：docs/NAVIGATION_ACCEPTANCE_TEST.md

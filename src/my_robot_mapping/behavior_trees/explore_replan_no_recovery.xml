@@ -1,0 +1,20 @@
+<!--
+  Exploration-specific Nav2 tree.
+
+  explore_lite already owns region selection, blacklisting, and trying the
+  next frontier. Running Nav2's default Spin/Wait/BackUp recovery sequence for
+  every blocked frontier makes a mapping robot oscillate beside furniture and
+  delays the next useful target. Here a planner or controller failure returns
+  immediately to explore_lite, which selects another nearby safe region.
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <PipelineSequence>
+      <RateController hz="1.0">
+        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+      </RateController>
+      <FollowPath path="{path}" controller_id="FollowPath"
+                  goal_checker_id="explore_goal_checker"/>
+    </PipelineSequence>
+  </BehaviorTree>
+</root>

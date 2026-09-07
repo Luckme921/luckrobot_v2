@@ -159,8 +159,8 @@ Visualization Manager:
       Axis: Z
       Channel Name: intensity
       Class: rviz_default_plugins/LaserScan
-      Color: 255; 255; 255
-      Color Transformer: Intensity
+      Color: 0; 170; 255
+      Color Transformer: FlatColor
       Decay Time: 0
       Enabled: true
       Invert Rainbow: false
@@ -168,7 +168,7 @@ Visualization Manager:
       Max Intensity: 4096
       Min Color: 0; 0; 0
       Min Intensity: 0
-      Name: LaserScan
+      Name: Camera Scan (blue)
       Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 3
@@ -193,8 +193,8 @@ Visualization Manager:
       Axis: Z
       Channel Name: intensity
       Class: rviz_default_plugins/LaserScan
-      Color: 255; 255; 255
-      Color Transformer: Intensity
+      Color: 255; 0; 0
+      Color Transformer: FlatColor
       Decay Time: 0
       Enabled: true
       Invert Rainbow: false
@@ -202,7 +202,7 @@ Visualization Manager:
       Max Intensity: 47
       Min Color: 0; 0; 0
       Min Intensity: 0
-      Name: LaserScan
+      Name: Main Lidar (red)
       Position Transformer: XYZ
       Selectable: true
       Size (Pixels): 3

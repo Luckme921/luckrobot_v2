@@ -18,6 +18,12 @@ def generate_launch_description():
     )
     use_rviz = LaunchConfiguration('use_rviz2')
 
+    cmd_vel_topic_arg = DeclareLaunchArgument(
+        'cmd_vel_topic', default_value='/cmd_vel',
+        description='底盘最终接收的速度话题；启用碰撞监控时使用 /cmd_vel_safe'
+    )
+    cmd_vel_topic = LaunchConfiguration('cmd_vel_topic')
+
     desc_pkg_path = get_package_share_directory('my_robot_description')
     bringup_pkg_path = get_package_share_directory('my_robot_bringup')
 
@@ -51,9 +57,12 @@ def generate_launch_description():
             'color_height': '480',
             'color_fps': '15',
             'depth_width': '640',
-            'depth_height': '480',
+            # Gemini 336L 内置 AMR 预设的推荐深度模式。
+            # 实机验证比 640x480 + Default 的近场有效点更稳定。
+            'depth_height': '400',
             'depth_fps': '15',
-            'depth_registration': 'false'
+            'depth_registration': 'false',
+            'device_preset': 'AMR with IR-Pass'
         }.items()
     )
 
@@ -77,6 +86,7 @@ def generate_launch_description():
         package='chassis_driver',
         executable='chassis_node',
         name='chassis_driver_node',
+        remappings=[('cmd_vel', cmd_vel_topic)],
         output='screen'
     )
 
@@ -89,7 +99,7 @@ def generate_launch_description():
     )
 
     # 3.4 雷达盒子滤波节点 (剔除车身内部无效点云)
-    box_filter_yaml = os.path.expanduser('~/ros2_ws/src/nav_config/box_filter.yaml')
+    box_filter_yaml = os.path.join(bringup_pkg_path, 'config', 'box_filter.yaml')
     laser_filter_node = Node(
         package='laser_filters',
         executable='scan_to_scan_filter_chain',
@@ -119,7 +129,7 @@ def generate_launch_description():
     )
 
     # 3.6 🌟 新增：相机的孤立点雷达滤波器 (剔除地面高反光噪点)
-    camera_filter_yaml = os.path.expanduser('~/ros2_ws/src/nav_config/camera_filter.yaml')
+    camera_filter_yaml = os.path.join(bringup_pkg_path, 'config', 'camera_filter.yaml')
     camera_filter_node = Node(
         package='laser_filters',
         executable='scan_to_scan_filter_chain',
@@ -148,6 +158,7 @@ def generate_launch_description():
     # ==========================================
     return LaunchDescription([
         use_rviz_arg,
+        cmd_vel_topic_arg,
         robot_description_launch,
         rplidar_launch,
         camera_launch,

@@ -3,11 +3,20 @@
 <package format="3">
   <name>my_robot_navigation</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>LuckRobot Nav2 configuration and navigation utilities.</description>
   <maintainer email="1814313359@qq.com">nvidia</maintainer>
   <license>TODO: License declaration</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_common</exec_depend>
+  <exec_depend>nav2_map_server</exec_depend>
+  <exec_depend>luckrobot_nav2_plugins</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

@@ -15,7 +15,13 @@ install(DIRECTORY
   launch
   config
   maps
+  behavior_trees
   DESTINATION share/${PROJECT_NAME}
+)
+
+install(PROGRAMS
+  scripts/vacuum_manager.py
+  DESTINATION lib/${PROJECT_NAME}
 )
 
 if(BUILD_TESTING)

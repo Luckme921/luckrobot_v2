@@ -1,10 +1,11 @@
-scan_filter_chain:
+camera_scan_filter_chain:
   ros__parameters:
     filter1:
-      name: radius_outlier
-      type: laser_filters/LaserScanRadiusOutlierFilter
+      name: depth_speckle_filter
+      type: laser_filters/LaserScanSpeckleFilter
       params:
-        # 查找半径：以当前点为圆心，向外扩展 0.3 米 
-        radius: 0.3
-        # 最少邻居数：在这个圆里，如果找不到至少 3 个其他点，这个点就被认定为孤立的噪点并剔除
-        min_neighbors: 3
+        # ROS 2 Humble 兼容配置：至少 3 个连续深度束的距离差不超过 0.3 m。
+        filter_type: 0
+        max_range: 3.0
+        max_range_difference: 0.3
+        filter_window: 3

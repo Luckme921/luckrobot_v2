@@ -1,0 +1,20 @@
+<library path="luckrobot_nav2_plugins">
+  <class
+    name="luckrobot_nav2_plugins/LuckController"
+    type="luckrobot_nav2_plugins::LuckController"
+    base_class_type="nav2_core::Controller">
+    <description>
+      Continuous-curvature differential-drive controller with rotate hysteresis,
+      goal braking, cost regulation and forward collision projection.
+    </description>
+  </class>
+  <class
+    name="luckrobot_nav2_plugins/LuckPlanner"
+    type="luckrobot_nav2_plugins::LuckPlanner"
+    base_class_type="nav2_core::GlobalPlanner">
+    <description>
+      Cost-aware eight-connected A-star planner with direction-change penalty,
+      obstacle-aware line-of-sight simplification and dense interpolation.
+    </description>
+  </class>
+</library>

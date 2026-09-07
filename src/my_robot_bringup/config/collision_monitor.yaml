@@ -1,0 +1,40 @@
+collision_monitor:
+  ros__parameters:
+    use_sim_time: false
+    base_frame_id: base_footprint
+    odom_frame_id: odom
+    cmd_vel_in_topic: /cmd_vel
+    cmd_vel_out_topic: /cmd_vel_safe
+    transform_tolerance: 0.5
+    source_timeout: 1.0
+    base_shift_correction: true
+    stop_pub_timeout: 1.0
+
+    # 圆形底盘采用 Humble 官方的方向感知 approach 模型。旧的前向 stop
+    # 矩形只要检测到点就会把平移和旋转同时清零，导致 Nav2 在障碍物前
+    # 既不能继续前进，也不能原地旋转或后退脱困。
+    #
+    # 真实车体半径为 0.175 m；这里增加 15 mm 安全余量。碰撞预测时域
+    # 2 s 会按当前运动方向渐进限速，远离障碍或圆形底盘原地旋转不会被
+    # 一个仅位于车体外部的前方点永久锁死。
+    polygons: ["FootprintApproach"]
+    FootprintApproach:
+      type: circle
+      radius: 0.19
+      action_type: approach
+      time_before_collision: 2.0
+      simulation_time_step: 0.1
+      max_points: 2
+      visualize: true
+      polygon_pub_topic: /collision_monitor/footprint_approach
+      enabled: true
+
+    observation_sources: ["lidar", "depth_scan"]
+    lidar:
+      type: scan
+      topic: /scan_filtered
+      enabled: true
+    depth_scan:
+      type: scan
+      topic: /scan_camera
+      enabled: true

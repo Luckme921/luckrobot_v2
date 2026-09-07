@@ -4,6 +4,7 @@
 import os
 import time
 import subprocess
+import math
 import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped
@@ -24,6 +25,19 @@ class VacuumManager(Node):
         # 记录 explore_lite 的进程
         self.explore_process = None
 
+    def stop_exploration(self):
+        """只停止由本管理器启动的 explore_lite 子进程。"""
+        if self.explore_process is None:
+            return
+        if self.explore_process.poll() is None:
+            self.explore_process.terminate()
+            try:
+                self.explore_process.wait(timeout=5.0)
+            except subprocess.TimeoutExpired:
+                self.explore_process.kill()
+                self.explore_process.wait(timeout=2.0)
+        self.explore_process = None
+
     def start_exploration(self):
         if self.explore_process is None or self.explore_process.poll() is not None:
             self.get_logger().info("🚀 启动全自动探索建图...")
@@ -39,38 +53,52 @@ class VacuumManager(Node):
         self.get_logger().info("💾 正在结束探索并保存地图...")
         
         # 1. 杀掉探索进程，让小车停下
-        if self.explore_process is not None:
-            self.explore_process.terminate()
-            self.explore_process.wait()
-            self.explore_process = None
+        self.stop_exploration()
             
         # 2. 调用 map_saver_cli 自动保存地图
-        map_dir = os.path.expanduser("~/ros2_ws/src/my_robot_navigation/maps")
+        map_dir = os.path.expanduser("~/ros2_ws/maps")
         os.makedirs(map_dir, exist_ok=True)
         map_path = os.path.join(map_dir, "my_room_map")
         
-        print("\n⏳ 正在固化 2D 栅格地图，请稍候...")
-        ret = os.system(f"ros2 run nav2_map_server map_saver_cli -f {map_path}")
+        print("\n⏳ 正在保存 slam_toolbox posegraph 和 2D 栅格地图，请稍候...")
+        try:
+            posegraph_result = subprocess.run(
+                [
+                    "ros2", "service", "call",
+                    "/slam_toolbox/serialize_map",
+                    "slam_toolbox/srv/SerializePoseGraph",
+                    "{filename: '" + map_path + "'}",
+                ],
+                check=False,
+                timeout=30.0,
+            )
+            raster_result = subprocess.run(
+                ["ros2", "run", "nav2_map_server", "map_saver_cli", "-f", map_path],
+                check=False,
+                timeout=30.0,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            self.get_logger().error(f"地图保存命令失败: {exc}")
+            return
         
-        if ret == 0:
-            print(f"\n🎉 地图保存成功！路径: {map_path}.yaml")
+        if posegraph_result.returncode == 0 and raster_result.returncode == 0:
+            print(f"\n🎉 地图保存成功：{map_path}.posegraph/.data/.yaml/.pgm")
         else:
-            print("\n❌ 地图保存失败，请检查 SLAM 节点是否正常运行。")
+            print("\n❌ 地图未完整保存，请检查 slam_toolbox 服务与 map 话题。")
 
     def go_home(self):
         self.get_logger().info("🏠 收到返航指令，正在自动规划回充路线...")
         
         # 杀掉探索进程防止冲突
-        if self.explore_process is not None:
-            self.explore_process.terminate()
-            self.explore_process = None
+        self.stop_exploration()
             
         goal_msg = PoseStamped()
         goal_msg.header.frame_id = 'map'
         goal_msg.header.stamp = self.get_clock().now().to_msg()
         goal_msg.pose.position.x = self.home_x
         goal_msg.pose.position.y = self.home_y
-        goal_msg.pose.orientation.w = 1.0 # 简化处理，朝向为 0 度
+        goal_msg.pose.orientation.z = math.sin(self.home_yaw / 2.0)
+        goal_msg.pose.orientation.w = math.cos(self.home_yaw / 2.0)
         
         self.goal_pub.publish(goal_msg)
         print("\n✅ 目标已下发！小车正在自动躲避障碍物，返回充电桩 (0,0)！")
@@ -103,8 +131,7 @@ def main(args=None):
                 manager.go_home()
             elif choice == '0':
                 print("👋 退出管家系统。")
-                if manager.explore_process:
-                    manager.explore_process.terminate()
+                manager.stop_exploration()
                 break
             else:
                 print("⚠️ 无效输入，请重新选择。")
@@ -116,8 +143,7 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        if manager.explore_process:
-            manager.explore_process.terminate()
+        manager.stop_exploration()
         manager.destroy_node()
         rclpy.shutdown()
 
