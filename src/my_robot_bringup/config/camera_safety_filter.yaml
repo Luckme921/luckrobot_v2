@@ -1,0 +1,15 @@
+camera_scan_safety_filter_chain:
+  ros__parameters:
+    filter1:
+      name: depth_safety_speckle_filter
+      type: laser_filters/LaserScanSpeckleFilter
+      params:
+        # The safety stream stays more permissive than the costmap planning
+        # stream, but the 2026-09-22 dynamic bag showed persistent empty-scene
+        # artifacts four to five beams wide. Six consecutive beams at similar
+        # range are still only about 7.5 mm wide at 0.5 m, while rejecting
+        # those artifacts before they can trip Collision Monitor.
+        filter_type: 0
+        max_range: 3.0
+        max_range_difference: 0.08
+        filter_window: 6

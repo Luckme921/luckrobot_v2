@@ -24,6 +24,12 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     start_at_dock = LaunchConfiguration('start_at_dock')
     navigation_profile = LaunchConfiguration('navigation_profile')
+    enable_stereo_ir = LaunchConfiguration('enable_stereo_ir')
+    vslam_camera_profile = LaunchConfiguration('vslam_camera_profile')
+    depth_scan_height = LaunchConfiguration('depth_scan_height')
+    depth_obstacle_mode = LaunchConfiguration('depth_obstacle_mode')
+    depth_min_obstacle_height = LaunchConfiguration('depth_min_obstacle_height')
+    depth_max_obstacle_height = LaunchConfiguration('depth_max_obstacle_height')
     use_sim_time_param = ParameterValue(use_sim_time, value_type=bool)
     start_at_dock_param = ParameterValue(start_at_dock, value_type=bool)
 
@@ -66,6 +72,45 @@ def generate_launch_description():
             'luck_full 再加入自定义规划器'
         ),
     )
+    enable_stereo_ir_arg = DeclareLaunchArgument(
+        'enable_stereo_ir',
+        default_value='false',
+        description=(
+            '是否让底层 Gemini 相机同时输出左右 IR 立体流；仅在外部 cuVSLAM '
+            '旁路运行时开启，默认关闭'
+        ),
+    )
+    vslam_camera_profile_arg = DeclareLaunchArgument(
+        'vslam_camera_profile',
+        default_value='navigation',
+        choices=['navigation', 'passive', 'interleaved'],
+        description=(
+            'Gemini 发射器档位；VSLAM 动态验收使用 interleaved，'
+            '普通导航保持 navigation'
+        ),
+    )
+    depth_scan_height_arg = DeclareLaunchArgument(
+        'depth_scan_height', default_value='60',
+        description=(
+            '旧版中央行深度伪激光垂直采样行数；仅供 legacy/shadow 模式。'
+        ),
+    )
+    depth_obstacle_mode_arg = DeclareLaunchArgument(
+        'depth_obstacle_mode', default_value='legacy',
+        choices=['legacy', 'shadow', 'height'],
+        description=(
+            'legacy=稳定基线；shadow=旁路验证完整高度扫描；'
+            'height=验证通过后由完整高度扫描接管避障。'
+        ),
+    )
+    depth_min_height_arg = DeclareLaunchArgument(
+        'depth_min_obstacle_height', default_value='0.12',
+        description='深度补充避障最低高度；2D雷达覆盖与其扫描平面相交的低位障碍。',
+    )
+    depth_max_height_arg = DeclareLaunchArgument(
+        'depth_max_obstacle_height', default_value='0.50',
+        description='相对 base_footprint 的最高碰撞包络。',
+    )
 
     base_cmd_vel_topic = PythonExpression([
         "'/cmd_vel_safe' if '", use_collision_monitor,
@@ -79,6 +124,12 @@ def generate_launch_description():
         launch_arguments={
             'use_rviz2': use_rviz,
             'cmd_vel_topic': base_cmd_vel_topic,
+            'enable_stereo_ir': enable_stereo_ir,
+            'vslam_camera_profile': vslam_camera_profile,
+            'depth_scan_height': depth_scan_height,
+            'depth_obstacle_mode': depth_obstacle_mode,
+            'depth_min_obstacle_height': depth_min_obstacle_height,
+            'depth_max_obstacle_height': depth_max_obstacle_height,
         }.items(),
     )
 
@@ -178,6 +229,12 @@ def generate_launch_description():
         use_sim_time_arg,
         start_at_dock_arg,
         navigation_profile_arg,
+        enable_stereo_ir_arg,
+        vslam_camera_profile_arg,
+        depth_scan_height_arg,
+        depth_obstacle_mode_arg,
+        depth_min_height_arg,
+        depth_max_height_arg,
         hardware,
         mapping_slam,
         localization_slam,

@@ -147,6 +147,17 @@ def generate_launch_description():
                 # 节点继续运行数分钟却不再发目标。
                 'hard_cost_wait_timeout': 15.0,
 
+                # V10.7 滚动视野接力：距当前安全落脚点约45cm时，只在
+                # 同一分支前方30度内预检一个至少再延伸20cm的新白区点。
+                # 新路径验证成功才由 Nav2 平滑抢占旧目标；验证失败则
+                # 继续执行旧目标，不随机跳区，也不取消健康运动。
+                'continuous_handoff_enabled': True,
+                'continuous_handoff_distance': 0.45,
+                'continuous_handoff_min_goal_age': 2.0,
+                'continuous_handoff_cooldown': 1.5,
+                'continuous_handoff_heading_tolerance': 0.52,
+                'continuous_handoff_min_advance': 0.20,
+
                 # 扫地机器人式连续性：同等距离优先选择当前朝向附近的
                 # 前沿，减少横跨房间和左右来回掉头。
                 # V5 首个 0.35 m 目标需要约 93 度转向，与前方候选几乎

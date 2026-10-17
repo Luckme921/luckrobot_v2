@@ -1,0 +1,12 @@
+# Persistent Isaac ROS release-3.2 layer for LuckRobot V2.
+ARG BASE_IMAGE=ubuntu:22.04
+FROM ${BASE_IMAGE}
+
+ARG ISAAC_ROS_VSLAM_VERSION=3.2.6-0jammy
+
+RUN --mount=type=cache,target=/var/cache/apt \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ros-humble-isaac-ros-visual-slam=${ISAAC_ROS_VSLAM_VERSION} && \
+    rm -rf /var/lib/apt/lists/*
+

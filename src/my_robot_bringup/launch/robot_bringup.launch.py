@@ -100,7 +100,9 @@ def generate_launch_description():
     laser_filter_node = Node(
         package='laser_filters',
         executable='scan_to_scan_filter_chain',
-        name='scan_to_scan_filter_chain',
+        # Keep the executable's default name. LaserScanBoxFilter owns an
+        # internal helper node and Humble applies an explicit __node remap to
+        # both, otherwise creating duplicate /scan_to_scan_filter_chain names.
         parameters=[box_filter_yaml],
         output='screen'
     )
@@ -117,7 +119,11 @@ def generate_launch_description():
             ('scan', '/scan_camera_raw') # 🌟 输出原始未滤波数据
         ],
         parameters=[{
-            'scan_height': 10,
+            # The camera is now ~0.37 m above the floor.  A 10-row slice can
+            # miss a desk edge only a few centimetres above the optical
+            # centre; 60 rows cover that height without reaching the floor
+            # within the 3 m range limit for the calibrated horizontal mount.
+            'scan_height': 60,
             'range_min': 0.15,
             'range_max': 3.0,
             'output_frame': 'camera_depth_frame'

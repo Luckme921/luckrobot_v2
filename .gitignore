@@ -20,6 +20,11 @@ Thumbs.db
 *.zip
 *.tar.gz
 *.deb
+*.db3
+*.mcap
+*.log
+backups/
+*.pre_*
 
 # 奥比中光SDK模型描述文件（体积大，无需版本管理）
 src/OrbbecSDK_ROS2/orbbec_description/

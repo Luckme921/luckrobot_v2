@@ -1,0 +1,44 @@
+vslam_odom_guard:
+  ros__parameters:
+    raw_odom_topic: /visual_slam/tracking/odometry
+    pose_covariance_topic: /visual_slam/tracking/vo_pose_covariance
+    reference_odom_topic: /odometry/filtered
+    validated_odom_topic: /visual_slam/tracking/odometry_validated
+    health_topic: /vslam/health
+
+    # Both Isaac ROS messages share a source stamp in the current 30 Hz stream.
+    sync_slop: 0.020
+    max_reference_age: 0.150
+
+    # The failed 300 s run reached 1-12 m position standard deviation and
+    # roughly 57 degrees yaw standard deviation before a 30.6 m pose jump.
+    max_position_std: 0.20
+    max_yaw_std: 0.1745329252
+
+    # Physical plausibility limits are deliberately above the production base
+    # limits, but far below the observed cuVSLAM relocalization jumps.
+    max_translation_step: 0.20
+    max_rotation_step: 0.3490658504
+    max_linear_speed: 1.00
+    max_angular_speed: 2.50
+
+    # The production wheel/IMU EKF remains the safety reference during shadow
+    # validation. Slow visual disagreement also pauses fusion.
+    max_reference_position_error: 0.50
+    max_reference_yaw_error: 0.5235987756
+
+    # Two seconds of healthy stereo frames are required before initial admission
+    # and after every tracking loss. Recovery is re-anchored without a jump.
+    recovery_good_samples: 60
+    queue_size: 80
+
+    # Keep six seconds of the 50 Hz production odometry so delayed 30 Hz
+    # cuVSLAM samples are compared with the reference at the same source time.
+    reference_queue_size: 300
+
+    # A single missing covariance/reference match is a transport drop, not a
+    # tracking loss. Three consecutive transport misses pause the stream.
+    # Non-finite values, jumps, high covariance and disagreement still stop it
+    # immediately.
+    transient_bad_samples: 3
+    stream_timeout: 0.35

@@ -6,14 +6,20 @@
   every blocked frontier makes a mapping robot oscillate beside furniture and
   delays the next useful target. Here a planner or controller failure returns
   immediately to explore_lite, which selects another nearby safe region.
+
+  Keep exploration on the same planner/controller pair as the validated
+  luck_full manual-navigation profile.  Using the legacy GridBased/FollowPath
+  pair here bypassed LuckController completely.  On the real chassis RPP then
+  repeatedly acceleration-limited an in-place turn to 0.02 rad/s from the
+  near-zero odometry feedback, below the motor's useful motion range.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
     <PipelineSequence>
       <RateController hz="1.0">
-        <ComputePathToPose goal="{goal}" path="{path}" planner_id="GridBased"/>
+        <ComputePathToPose goal="{goal}" path="{path}" planner_id="LuckGrid"/>
       </RateController>
-      <FollowPath path="{path}" controller_id="FollowPath"
+      <FollowPath path="{path}" controller_id="LuckFollowPath"
                   goal_checker_id="explore_goal_checker"/>
     </PipelineSequence>
   </BehaviorTree>

@@ -124,14 +124,23 @@ planner_server:
       tolerance: 0.35
       allow_unknown: true
       max_planning_cost: 252
-      # 高膨胀代价比路长更重要，使 A* 偏向通道中部。
-      cost_penalty: 3.0
+      # V11.5：提高软代价权重，使路径在仍可通行的窄处尽量居中。
+      cost_penalty: 5.0
       # 将方向作为搜索状态，抑制连续锯齿换向。
       turn_penalty: 0.20
-      # 仅在明显低代价的已知区域做直视化简，避免抄近障碍物边角。
-      smoothing_max_cost: 180
+      # V11.5：实测停止点的中心代价仅 153/173，但预测 footprint 已撞到
+      # 254。收紧直视化简阈值，避免平滑后的长线段切过拐角内侧。
+      smoothing_max_cost: 100
       interpolation_resolution: 0.05
       max_iterations: 1000000
+      # V12.13: periodic replanning may discover a high obstacle and choose a
+      # safe detour. Keep that detour while it remains traversable instead of
+      # switching back to a temporarily shorter route when the forward camera
+      # turns away. A newly occupied cell still invalidates it immediately.
+      route_hysteresis_enabled: true
+      route_reuse_goal_tolerance: 0.15
+      route_reuse_goal_yaw_tolerance: 0.35
+      route_reuse_start_tolerance: 0.45
 
 smoother_server:
   ros__parameters:
@@ -225,7 +234,18 @@ controller_server:
       min_linear_vel: 0.03
       max_angular_vel: 0.35
       rotate_angular_vel: 0.25
+      # 防止制动包络末端落入电机静摩擦死区、恰好停在退出阈值之外。
+      min_rotate_angular_vel: 0.08
       lookahead_dist: 0.35
+      # V11.8：直线仍使用 0.35 m；当近端与远端路径方向不一致时，连续缩短
+      # 到 0.12 m，避免 Pure Pursuit 跨过近端急弯后抄近路撞向内侧障碍物。
+      # V12.13.1：322 s 实车包显示，0.12 m 短前视会放大缓存路线入口处的
+      # 横向小误差，单向弯路也出现稳定左右换向。离线按真实 TF/路径重算后，
+      # 0.16 m 可减少约 19% 的普通跟踪换向，同时仍显著短于直线 0.35 m，
+      # 完整 footprint 预测与局部避障继续阻止切角碰撞。
+      corner_lookahead_dist: 0.16
+      corner_lookahead_start_angle: 0.20
+      corner_lookahead_full_angle: 0.45
       approach_dist: 0.35
       # 必须不大于 GoalChecker 的 0.08 m，否则会提前停止平移并永久到不了点。
       goal_rotate_dist: 0.08
@@ -237,7 +257,13 @@ controller_server:
       # 已经在移动时，小于约46°的偏差使用 v+w 连续修正，不停车切换。
       hard_rotate_angle: 0.80
       rotate_gain: 1.0
-      path_heading_gain: 0.60
+      # V11.4：实车 180° 往返显示控制方向正确，但掉头末段欠阻尼。
+      # 0.20 rad/s² 仅用于计算提前制动包络：约 17.5° 时开始把 0.25 rad/s
+      # 转速往下收；最低保持 0.08 rad/s，8.6° 退出后仍以 v+w 连续修正。
+      rotate_braking_decel: 0.20
+      # V11.6：Pure Pursuit 已经通过实际前视点曲率闭环修正航向。禁用未来路径
+      # 线段切向附加项，避免动态重规划的拐角切向与当前前视点分处两侧时反打。
+      path_heading_gain: 0.0
       curvature_speed_gain: 1.0
       cost_speed_gain: 0.55
       min_cost_speed_scale: 0.40
@@ -245,9 +271,63 @@ controller_server:
       max_angular_accel: 0.0
       max_angular_decel: 0.80
       transform_tolerance: 1.0
-      collision_horizon: 1.0
+      # 先验证原始指令；若会碰撞，再在 1.5 s 窗口内滚动评价
+      # 3 组线速度 x 7 组角速度；所有前进弧均失败时先尝试经过 footprint
+      # 碰撞验证的低速原地松角，仍无解才允许严格受限的安全短倒退。
+      collision_horizon: 1.5
       use_collision_detection: true
-
+      use_local_avoidance: true
+      # 允许 footprint 外缘经过高膨胀带，但正常轨迹的机器人中心不得进入
+      # 253 内切区；若启动时已经在 253，只允许真实退出该区域的速度弧线。
+      max_trajectory_center_cost: 252
+      avoidance_angular_span: 0.45
+      avoidance_angular_samples: 7
+      avoidance_min_linear_scale: 0.35
+      # 候选轨迹评分：首先贴合当前路径/前视点，其次远离高代价区域，
+      # 同时抑制左右反复换向与不必要降速。
+      avoidance_path_weight: 2.5
+      avoidance_heading_weight: 0.60
+      avoidance_cost_weight: 0.80
+      avoidance_smoothness_weight: 0.35
+      avoidance_speed_weight: 0.50
+      # 不再只比较被起点高代价支配的 max footprint；显式奖励轨迹末端
+      # 进入更低中心代价，防止避障采样器选择朝障碍物更近的一侧。
+      avoidance_clearance_weight: 2.0
+      avoidance_switch_penalty: 0.40
+      avoidance_side_hold_time: 2.0
+      # 仅在所有前进弧和扫掠原地转向都失败时启用：4 cm/s、每个导航目标
+      # 累计最多 2 s（约 8 cm）；整段 footprint 安全且中心代价至少下降 2
+      # 才会输出。Collision Monitor 仍在下游做独立最终拦截。
+      reverse_escape_linear_vel: 0.04
+      reverse_escape_angular_vel: 0.12
+      reverse_escape_timeout: 2.0
+      reverse_escape_min_cost_drop: 2.0
+      # 动态行人短时挡路先停车等候；5 s 内仍没有任何安全速度弧线，
+      # 才结束本次 FollowPath，由自定义“安静恢复树”清图并重规划。
+      obstacle_wait_timeout: 1.5
+      obstacle_failure_timeout: 5.0
+      # V11.7.1：正常轨迹有效、控制器持续给出非零速度，但融合里程计连续
+      # 3 s 仍静止时，主动结束当前 FollowPath，让行为树清图并重新规划。
+      # 纯原地转向使用独立的 6 s 窗口：实车可能在破静摩擦过程中
+      # 出现短暂起步、停顿和再起步，3 s 会误伤原有恢复能力。
+      # 两者都不会改变正常速度输出。
+      execution_stall_timeout: 3.0
+      execution_rotation_stall_timeout: 6.0
+      # V12.11：轮端在约 5~6 RPM 时可能报告旋转，但实车仍未克服静摩擦。
+      # 若 IMU 连续 0.6 s 证明车体没有转动，短暂提升到已经验收的 0.35
+      # rad/s 上限；一旦真实转动便恢复原 0.25 rad/s 与原制动包络。
+      rotation_breakaway_delay: 0.60
+      rotation_breakaway_angular_vel: 0.35
+      # 仅供“指令是否到达执行器”的监测使用；控制与定位仍使用
+      # /odometry/filtered。平移仍参考轮速；纯原地转向必须由 IMU 证明车体
+      # 确实旋转，不能再把电机轴/编码器进展当作整车转动。
+      execution_feedback_odom_topic: /wheel/odom
+      execution_feedback_imu_topic: /imu/data
+      execution_feedback_timeout: 0.50
+      motion_command_linear_threshold: 0.03
+      motion_command_angular_threshold: 0.05
+      motion_feedback_linear_threshold: 0.01
+      motion_feedback_angular_threshold: 0.03
 # =====================================================================
 # 🗺️ 全局代价地图
 # =====================================================================
@@ -263,10 +343,15 @@ global_costmap:
       robot_radius: 0.175     
       resolution: 0.05
       track_unknown_space: true
-      plugins: ["static_layer", "obstacle_layer", "inflation_layer"]
-      obstacle_layer:
+      # V12.13: lidar and height camera are independent physical planes. They
+      # must contribute separate obstacle layers so a low lidar clearing ray
+      # cannot erase an overhang that only the camera can see. The master
+      # costmap merges both layers by maximum cost before inflation/planning.
+      plugins: ["static_layer", "lidar_obstacle_layer", "camera_obstacle_layer", "inflation_layer"]
+      lidar_obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
+        combination_method: 1
         observation_sources: scan
         scan:
           topic: /scan_filtered
@@ -278,6 +363,26 @@ global_costmap:
           raytrace_min_range: 0.15
           obstacle_max_range: 10.0
           obstacle_min_range: 0.15
+      camera_obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        combination_method: 1
+        observation_sources: camera
+        camera:
+          topic: /scan_camera
+          max_obstacle_height: 2.0
+          clearing: True
+          marking: True
+          data_type: "LaserScan"
+          # Keep only the latest confirmed scan.  Old buffered hits otherwise
+          # re-mark a person after newer finite rays have cleared that space.
+          # This is NOT a TTL for out-of-view obstacle cells: those remain
+          # until a valid clearing observation or an explicit map reset.
+          observation_persistence: 0.0
+          raytrace_max_range: 2.0
+          raytrace_min_range: 0.25
+          obstacle_max_range: 1.5
+          obstacle_min_range: 0.25
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: True
@@ -305,11 +410,12 @@ local_costmap:
       height: 3
       resolution: 0.05
       robot_radius: 0.175     
-      plugins: ["obstacle_layer", "inflation_layer"]
-      obstacle_layer:
+      plugins: ["lidar_obstacle_layer", "camera_obstacle_layer", "inflation_layer"]
+      lidar_obstacle_layer:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
-        observation_sources: scan camera
+        combination_method: 1
+        observation_sources: scan
         scan:
           topic: /scan_filtered
           max_obstacle_height: 2.0
@@ -320,12 +426,21 @@ local_costmap:
           raytrace_min_range: 0.15
           obstacle_max_range: 2.5
           obstacle_min_range: 0.15
+      camera_obstacle_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"
+        enabled: True
+        combination_method: 1
+        observation_sources: camera
         camera:
           topic: /scan_camera
           max_obstacle_height: 2.0
           clearing: True
           marking: True
           data_type: "LaserScan"
+          # Keep only the latest confirmed scan; old hits must not fight
+          # current clearing rays.  Invalid/no-depth rays remain unknown,
+          # never asserted free (inf_is_valid stays at its false default).
+          observation_persistence: 0.0
           raytrace_max_range: 3.0
           raytrace_min_range: 0.25
           obstacle_max_range: 2.5

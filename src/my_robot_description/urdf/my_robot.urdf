@@ -64,8 +64,9 @@
   </link>
 
   <joint name="camera_color_screw_joint" type="fixed">
-    <!-- SW 导出的倒装姿态及你最新精调的位姿补偿 -->
-    <origin xyz="0.1434 -0.0002 0.13933" rpy="3.1416 0 -0.0467" />
+    <!-- 2026-09-12：203 mm 升高夹具安装后，用12组棋盘/墙平面数据标定。
+         棋盘正面到墙面补偿为 3.0 mm 板厚 + 3.5 mm 胶层/间隙。 -->
+    <origin xyz="0.146327 -0.002217 0.342200" rpy="3.138477 -0.004836 -0.043870" />
     <parent link="base_link" />
     <child link="camera_color_screw_frame" />
   </joint>

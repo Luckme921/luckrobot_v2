@@ -34,7 +34,7 @@ slam_toolbox:
     minimum_travel_heading: 0.2       # 机器人转 0.2 弧度(约11度)插一个新节点
     scan_buffer_size: 10
     scan_buffer_maximum_scan_distance: 12.0 # A2M12 的最大有效距离
-    link_match_minimum_response_fine: 0.1  
+    link_match_minimum_response_fine: 0.1
     link_scan_maximum_distance: 8.0
     
     # 图优化机制 (Loop Closure)

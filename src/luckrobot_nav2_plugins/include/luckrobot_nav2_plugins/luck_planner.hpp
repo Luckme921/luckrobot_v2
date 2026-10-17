@@ -1,6 +1,7 @@
 #ifndef LUCKROBOT_NAV2_PLUGINS__LUCK_PLANNER_HPP_
 #define LUCKROBOT_NAV2_PLUGINS__LUCK_PLANNER_HPP_
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -52,7 +53,15 @@ private:
     const std::vector<Cell> & cells,
     const geometry_msgs::msg::PoseStamped & start,
     const geometry_msgs::msg::PoseStamped & goal) const;
+  bool buildReusablePath(
+    const geometry_msgs::msg::PoseStamped & start,
+    const geometry_msgs::msg::PoseStamped & goal,
+    nav_msgs::msg::Path & path);
+  bool goalsMatch(
+    const geometry_msgs::msg::PoseStamped & first,
+    const geometry_msgs::msg::PoseStamped & second) const;
   bool isTraversable(unsigned int x, unsigned int y) const;
+  bool lineIsTraversable(const Cell & start, const Cell & goal) const;
   bool lineIsClear(const Cell & start, const Cell & goal) const;
 
   rclcpp_lifecycle::LifecycleNode::WeakPtr node_;
@@ -67,11 +76,18 @@ private:
   bool allow_unknown_{true};
   double tolerance_{0.35};
   int max_planning_cost_{252};
-  int smoothing_max_cost_{180};
-  double cost_penalty_{3.0};
+  int smoothing_max_cost_{100};
+  double cost_penalty_{5.0};
   double turn_penalty_{0.20};
   double interpolation_resolution_{0.05};
   int max_iterations_{1000000};
+  bool route_hysteresis_enabled_{true};
+  double route_reuse_goal_tolerance_{0.15};
+  double route_reuse_goal_yaw_tolerance_{0.35};
+  double route_reuse_start_tolerance_{0.45};
+  nav_msgs::msg::Path cached_path_;
+  geometry_msgs::msg::PoseStamped cached_goal_;
+  std::size_t cached_progress_index_{0};
 };
 
 }  // namespace luckrobot_nav2_plugins

@@ -31,6 +31,7 @@ namespace
 constexpr int kDirectionCount = 8;
 constexpr int kStateDirections = 9;
 constexpr int kNoDirection = 8;
+constexpr double kPi = 3.14159265358979323846;
 constexpr std::array<int, kDirectionCount> kDx{{1, 1, 0, -1, -1, -1, 0, 1}};
 constexpr std::array<int, kDirectionCount> kDy{{0, 1, 1, 1, 0, -1, -1, -1}};
 
@@ -85,6 +86,18 @@ void LuckPlanner::configure(
     node, plugin_name_ + ".smoothing_max_cost", rclcpp::ParameterValue(smoothing_max_cost_));
   declare_parameter_if_not_declared(
     node, plugin_name_ + ".max_iterations", rclcpp::ParameterValue(max_iterations_));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".route_hysteresis_enabled",
+    rclcpp::ParameterValue(route_hysteresis_enabled_));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".route_reuse_goal_tolerance",
+    rclcpp::ParameterValue(route_reuse_goal_tolerance_));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".route_reuse_goal_yaw_tolerance",
+    rclcpp::ParameterValue(route_reuse_goal_yaw_tolerance_));
+  declare_parameter_if_not_declared(
+    node, plugin_name_ + ".route_reuse_start_tolerance",
+    rclcpp::ParameterValue(route_reuse_start_tolerance_));
 
   node->get_parameter(plugin_name_ + ".allow_unknown", allow_unknown_);
   node->get_parameter(plugin_name_ + ".tolerance", tolerance_);
@@ -95,28 +108,45 @@ void LuckPlanner::configure(
   node->get_parameter(plugin_name_ + ".max_planning_cost", max_planning_cost_);
   node->get_parameter(plugin_name_ + ".smoothing_max_cost", smoothing_max_cost_);
   node->get_parameter(plugin_name_ + ".max_iterations", max_iterations_);
+  node->get_parameter(
+    plugin_name_ + ".route_hysteresis_enabled", route_hysteresis_enabled_);
+  node->get_parameter(
+    plugin_name_ + ".route_reuse_goal_tolerance", route_reuse_goal_tolerance_);
+  node->get_parameter(
+    plugin_name_ + ".route_reuse_goal_yaw_tolerance",
+    route_reuse_goal_yaw_tolerance_);
+  node->get_parameter(
+    plugin_name_ + ".route_reuse_start_tolerance", route_reuse_start_tolerance_);
 
   if (tolerance_ < 0.0 || interpolation_resolution_ <= 0.0 ||
     max_planning_cost_ < 0 || max_planning_cost_ > 252 ||
     smoothing_max_cost_ < 0 || smoothing_max_cost_ > max_planning_cost_ ||
-    max_iterations_ <= 0)
+    max_iterations_ <= 0 || route_reuse_goal_tolerance_ < 0.0 ||
+    route_reuse_goal_yaw_tolerance_ < 0.0 || route_reuse_start_tolerance_ <= 0.0)
   {
     throw nav2_core::PlannerException("LuckPlanner parameters are outside safe bounds");
   }
 
   RCLCPP_INFO(
     logger_,
-    "Configured %s: A* cost<=%d, smooth cost<=%d, tolerance=%.2f m",
-    plugin_name_.c_str(), max_planning_cost_, smoothing_max_cost_, tolerance_);
+    "Configured %s: A* cost<=%d, smooth cost<=%d, tolerance=%.2f m, "
+    "route hysteresis=%s (start %.2f m, goal %.2f m / %.1f deg)",
+    plugin_name_.c_str(), max_planning_cost_, smoothing_max_cost_, tolerance_,
+    route_hysteresis_enabled_ ? "on" : "off", route_reuse_start_tolerance_,
+    route_reuse_goal_tolerance_, route_reuse_goal_yaw_tolerance_ * 180.0 / kPi);
 }
 
 void LuckPlanner::cleanup()
 {
+  cached_path_.poses.clear();
+  cached_progress_index_ = 0;
   RCLCPP_INFO(logger_, "Cleaned up %s", plugin_name_.c_str());
 }
 
 void LuckPlanner::activate()
 {
+  cached_path_.poses.clear();
+  cached_progress_index_ = 0;
   RCLCPP_INFO(logger_, "Activated %s", plugin_name_.c_str());
 }
 
@@ -158,6 +188,17 @@ nav_msgs::msg::Path LuckPlanner::createPlan(
 
   std::unique_lock<nav2_costmap_2d::Costmap2D::mutex_t> lock(*(costmap_->getMutex()));
 
+  nav_msgs::msg::Path reused_path;
+  if (route_hysteresis_enabled_ && buildReusablePath(start, goal, reused_path)) {
+    lock.unlock();
+    RCLCPP_INFO_THROTTLE(
+      logger_, *clock_, 5000,
+      "%s keeps the current safe route (%zu poses remain); refusing a shorter "
+      "route-only switch",
+      plugin_name_.c_str(), reused_path.poses.size());
+    return reused_path;
+  }
+
   std::vector<Cell> cells;
   if (isTraversable(goal_cell.x, goal_cell.y)) {
     cells = search(start_cell, goal_cell, false);
@@ -166,6 +207,8 @@ nav_msgs::msg::Path LuckPlanner::createPlan(
     cells = search(start_cell, goal_cell, true);
   }
   if (cells.empty()) {
+    cached_path_.poses.clear();
+    cached_progress_index_ = 0;
     RCLCPP_WARN(
       logger_, "%s found no path to (%.2f, %.2f), including %.2f m tolerance",
       plugin_name_.c_str(), goal.pose.position.x, goal.pose.position.y, tolerance_);
@@ -174,12 +217,114 @@ nav_msgs::msg::Path LuckPlanner::createPlan(
 
   const auto simplified = simplify(cells);
   auto path = cellsToPath(simplified, start, goal);
+  cached_path_ = path;
+  cached_goal_ = goal;
+  cached_progress_index_ = 0;
   lock.unlock();
 
   RCLCPP_DEBUG(
     logger_, "%s planned %zu grid cells -> %zu waypoints -> %zu dense poses",
     plugin_name_.c_str(), cells.size(), simplified.size(), path.poses.size());
   return path;
+}
+
+bool LuckPlanner::goalsMatch(
+  const geometry_msgs::msg::PoseStamped & first,
+  const geometry_msgs::msg::PoseStamped & second) const
+{
+  if (first.header.frame_id != second.header.frame_id) {
+    return false;
+  }
+  const double position_error = std::hypot(
+    first.pose.position.x - second.pose.position.x,
+    first.pose.position.y - second.pose.position.y);
+  const double yaw_error = std::abs(std::remainder(
+    tf2::getYaw(first.pose.orientation) - tf2::getYaw(second.pose.orientation),
+    2.0 * kPi));
+  return position_error <= route_reuse_goal_tolerance_ &&
+         yaw_error <= route_reuse_goal_yaw_tolerance_;
+}
+
+bool LuckPlanner::buildReusablePath(
+  const geometry_msgs::msg::PoseStamped & start,
+  const geometry_msgs::msg::PoseStamped & goal,
+  nav_msgs::msg::Path & path)
+{
+  if (cached_path_.poses.size() < 2 || !goalsMatch(cached_goal_, goal)) {
+    return false;
+  }
+
+  const std::size_t first_candidate = std::min(
+    cached_progress_index_, cached_path_.poses.size() - 1);
+  std::size_t nearest_index = first_candidate;
+  double nearest_distance = std::numeric_limits<double>::infinity();
+  for (std::size_t i = first_candidate; i < cached_path_.poses.size(); ++i) {
+    const double distance = std::hypot(
+      cached_path_.poses[i].pose.position.x - start.pose.position.x,
+      cached_path_.poses[i].pose.position.y - start.pose.position.y);
+    if (distance < nearest_distance) {
+      nearest_distance = distance;
+      nearest_index = i;
+    }
+  }
+  if (nearest_distance > route_reuse_start_tolerance_) {
+    return false;
+  }
+
+  Cell current_cell;
+  Cell nearest_cell;
+  if (!costmap_->worldToMap(
+      start.pose.position.x, start.pose.position.y,
+      current_cell.x, current_cell.y) ||
+    !costmap_->worldToMap(
+      cached_path_.poses[nearest_index].pose.position.x,
+      cached_path_.poses[nearest_index].pose.position.y,
+      nearest_cell.x, nearest_cell.y) ||
+    !lineIsTraversable(current_cell, nearest_cell))
+  {
+    return false;
+  }
+
+  // A newly observed obstacle must invalidate the old route immediately.
+  // The cached route is densely sampled at interpolation_resolution_, so
+  // checking every remaining pose also checks every traversed costmap cell.
+  for (std::size_t i = nearest_index; i < cached_path_.poses.size(); ++i) {
+    unsigned int mx = 0;
+    unsigned int my = 0;
+    if (!costmap_->worldToMap(
+        cached_path_.poses[i].pose.position.x,
+        cached_path_.poses[i].pose.position.y, mx, my) ||
+      !isTraversable(mx, my))
+    {
+      return false;
+    }
+  }
+
+  cached_progress_index_ = nearest_index;
+  path.header.frame_id = global_frame_;
+  path.header.stamp = clock_->now();
+  path.poses.reserve(cached_path_.poses.size() - nearest_index);
+  // Preserve the geometry that was accepted when this route was created.
+  // Prepending the latest robot pose on every periodic replan creates a new
+  // short connector into the cached route.  On a differential-drive chassis,
+  // that connector can alternate across the route as the robot crosses the
+  // centerline, changing the near/far lookahead bend and producing repeated
+  // left/right steering even though the safe global route never changed.
+  //
+  // The controller already projects the robot onto the closest remaining path
+  // pose and tracks forward from there.  The traversability check above still
+  // validates the physical connection from the current pose to that closest
+  // pose, so omitting the synthetic connector does not bypass obstacle checks.
+  for (std::size_t i = nearest_index; i < cached_path_.poses.size(); ++i) {
+    auto pose = cached_path_.poses[i];
+    pose.header = path.header;
+    path.poses.push_back(std::move(pose));
+  }
+  if (path.poses.size() < 2) {
+    return false;
+  }
+  path.poses.back().pose.orientation = goal.pose.orientation;
+  return true;
 }
 
 bool LuckPlanner::isTraversable(unsigned int x, unsigned int y) const
@@ -192,6 +337,49 @@ bool LuckPlanner::isTraversable(unsigned int x, unsigned int y) const
     return allow_unknown_;
   }
   return static_cast<int>(cost) <= max_planning_cost_;
+}
+
+bool LuckPlanner::lineIsTraversable(const Cell & start, const Cell & goal) const
+{
+  int x0 = static_cast<int>(start.x);
+  int y0 = static_cast<int>(start.y);
+  const int x1 = static_cast<int>(goal.x);
+  const int y1 = static_cast<int>(goal.y);
+  const int dx = std::abs(x1 - x0);
+  const int sx = x0 < x1 ? 1 : -1;
+  const int dy = -std::abs(y1 - y0);
+  const int sy = y0 < y1 ? 1 : -1;
+  int error = dx + dy;
+  int previous_x = x0;
+  int previous_y = y0;
+
+  while (true) {
+    if (!isTraversable(
+        static_cast<unsigned int>(x0), static_cast<unsigned int>(y0)))
+    {
+      return false;
+    }
+    if (x0 == x1 && y0 == y1) {
+      return true;
+    }
+    const int doubled_error = 2 * error;
+    if (doubled_error >= dy) {
+      error += dy;
+      x0 += sx;
+    }
+    if (doubled_error <= dx) {
+      error += dx;
+      y0 += sy;
+    }
+    if (x0 != previous_x && y0 != previous_y &&
+      (!isTraversable(static_cast<unsigned int>(x0), static_cast<unsigned int>(previous_y)) ||
+      !isTraversable(static_cast<unsigned int>(previous_x), static_cast<unsigned int>(y0))))
+    {
+      return false;
+    }
+    previous_x = x0;
+    previous_y = y0;
+  }
 }
 
 std::vector<LuckPlanner::Cell> LuckPlanner::search(

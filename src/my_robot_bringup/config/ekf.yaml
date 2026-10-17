@@ -3,6 +3,8 @@ ekf_filter_node:
     frequency: 50.0
     two_d_mode: true
     publish_tf: true
+    reset_on_time_jump: true
+    sensor_timeout: 0.20
     
     map_frame: map
     odom_frame: odom
@@ -14,13 +16,19 @@ ekf_filter_node:
     # ============================================
     odom0: /wheel/odom
     # 矩阵含义: [x, y, z, roll, pitch, yaw, vx, vy, vz, vroll, vpitch, vyaw, ax, ay, az]
-    # 轮子提供: X速度 (vx), Z角速度 (vyaw)
+    # 轮子只提供 X 速度 (vx)。Z 角速度必须由 IMU 提供。
+    # 实车数据已证明：底盘被卡住/车轮空转时，电机编码器可以继续
+    # 报告旋转，而 IMU 确认车体完全未转。融合轮速 vyaw 会直接污染
+    # odom->base_footprint，最终使 SLAM 匹配丢失和点云漂移。
     odom0_config: [false, false, false,
                    false, false, false,
                    true,  false, false,
-                   false, false, true,
+                   false, false, false,
                    false, false, false]
     odom0_differential: false
+    # 第二道保险：即使底盘驱动之外出现同名话题或异常 Twist，也不允许
+    # 单帧离群速度把 odom->base_footprint 推到地图外。
+    odom0_twist_rejection_threshold: 2.0
 
     # ============================================
     # 2. IMU 传感器输入

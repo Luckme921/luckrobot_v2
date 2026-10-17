@@ -99,6 +99,13 @@ constexpr int RS485_DELAY_US = 300;       // RS485 总线半双工读写切换�
 constexpr int RS485_CMD_RETRY = 2;        // 单帧校验失败或丢失时的重试次数
 constexpr int MAX_COMM_FAILURES = 5;      // 连续通讯失败阈值，超限则彻底重启串口
 
+// 编码器/调度毛刺绝不能作为瞬时速度送进 EKF。300 RPM 是电机物理上限；
+// 额外余量只吸收量化误差和回包抖动，不允许单帧异常把 odom 积分到地图外。
+constexpr double ODOM_MIN_DT = 1.0e-4;
+constexpr double ODOM_ENCODER_RATE_MARGIN = 1.50;
+constexpr double ODOM_ENCODER_QUANTIZATION_MARGIN_RAD = 0.02;
+constexpr double ODOM_TWIST_LIMIT_MARGIN = 1.25;
+
 // ==================== 7. 全局句柄 (确保信号杀死进程时的安全) ====================
 std::atomic<bool> g_node_running(false);
 std::atomic<bool> g_signal_handled(false);
@@ -409,11 +416,43 @@ private:
         }
 
         double dt = (current_time - last_odom_time_).seconds();
-        if (dt <= 0.0) return;
+        if (!std::isfinite(dt) || dt <= ODOM_MIN_DT) {
+            // 时间源回拨或两个有效回包挤在同一时刻时，差分速度没有物理意义。
+            // 前移锚点，避免下一帧继续携带本帧增量。
+            last_odom_left_rad_ = current_left_rad;
+            last_odom_right_rad_ = current_right_rad;
+            last_odom_time_ = current_time;
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(), *this->get_clock(), 2000,
+                "Rejecting wheel odometry sample with invalid dt=%.9f s", dt);
+            return;
+        }
 
         // 1. 获取相邻两次实际调度间轮子转过的增量弧度
         double d_left_rad = current_left_rad - last_odom_left_rad_;
         double d_right_rad = current_right_rad - last_odom_right_rad_;
+
+        const double max_wheel_rad_per_second =
+            (static_cast<double>(RPM_LIMIT) / 60.0) * (2.0 * M_PI);
+        const double max_wheel_delta =
+            max_wheel_rad_per_second * dt * ODOM_ENCODER_RATE_MARGIN +
+            ODOM_ENCODER_QUANTIZATION_MARGIN_RAD;
+
+        if (!std::isfinite(d_left_rad) || !std::isfinite(d_right_rad) ||
+            std::abs(d_left_rad) > max_wheel_delta ||
+            std::abs(d_right_rad) > max_wheel_delta) {
+            // 丢弃毛刺，但仍更新差分锚点。若回包下一帧恢复，反向毛刺也会被
+            // 独立丢弃，累计位姿和送往 EKF 的速度都不会受到污染。
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(), *this->get_clock(), 2000,
+                "Rejecting implausible encoder step: dt=%.6f s, left=%.4f rad, "
+                "right=%.4f rad, limit=%.4f rad",
+                dt, d_left_rad, d_right_rad, max_wheel_delta);
+            last_odom_left_rad_ = current_left_rad;
+            last_odom_right_rad_ = current_right_rad;
+            last_odom_time_ = current_time;
+            return;
+        }
 
         // 2. 将设计常量转为国际标准单位 (米)
         double R = WHEEL_DIAMETER_MM / 2000.0; // 轮半径 0.05 m
@@ -427,17 +466,35 @@ private:
         double d_s = (d_right_dist + d_left_dist) / 2.0; // 底盘中心前进距离
         double d_th = (d_right_dist - d_left_dist) / L;  // 底盘中心旋转角度差
 
-        // 5. 坐标系积分推演 (中点欧拉法，精度高于基本欧拉法)
+        // 5. 估算瞬时线速度与角速度。必须先验收 Twist，再修改累计位姿。
+        double vx = d_s / dt;
+        double vth = d_th / dt;
+
+        const double max_linear_twist =
+            MAX_PHYSICAL_LIN_VEL * ODOM_TWIST_LIMIT_MARGIN;
+        const double max_angular_twist =
+            MAX_PHYSICAL_ANG_VEL * ODOM_TWIST_LIMIT_MARGIN;
+        if (!std::isfinite(vx) || !std::isfinite(vth) ||
+            std::abs(vx) > max_linear_twist ||
+            std::abs(vth) > max_angular_twist) {
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(), *this->get_clock(), 2000,
+                "Rejecting implausible wheel twist: vx=%.3f m/s, wz=%.3f rad/s "
+                "(limits %.3f/%.3f)",
+                vx, vth, max_linear_twist, max_angular_twist);
+            last_odom_left_rad_ = current_left_rad;
+            last_odom_right_rad_ = current_right_rad;
+            last_odom_time_ = current_time;
+            return;
+        }
+
+        // 6. 坐标系积分推演 (中点欧拉法，精度高于基本欧拉法)
         double dx = d_s * cos(odom_th_ + d_th / 2.0);
         double dy = d_s * sin(odom_th_ + d_th / 2.0);
 
         odom_x_ += dx;
         odom_y_ += dy;
         odom_th_ += d_th;
-
-        // 6. 估算瞬时线速度与角速度
-        double vx = d_s / dt;
-        double vth = d_th / dt;
 
         // 7. 组装并发布 /wheel/odom 消息
         nav_msgs::msg::Odometry odom;

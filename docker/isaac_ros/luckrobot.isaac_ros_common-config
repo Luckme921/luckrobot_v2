@@ -1,0 +1,4 @@
+# LuckRobot-owned layer on top of the official Isaac ROS Humble image.
+CONFIG_IMAGE_KEY=ros2_humble.luckrobot_vslam
+CONFIG_CONTAINER_NAME_SUFFIX=luckrobot-vslam
+

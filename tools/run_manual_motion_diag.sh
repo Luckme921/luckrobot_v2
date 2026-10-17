@@ -9,6 +9,10 @@
 # Usage:
 #   bash ~/ros2_ws/tools/run_manual_motion_diag.sh linear
 #   bash ~/ros2_ws/tools/run_manual_motion_diag.sh turn
+#   MANUAL_CMD_VEL_TOPIC=/cmd_vel_vslam_test \
+#     bash ~/ros2_ws/tools/run_manual_motion_diag.sh vslam_linear
+#   MANUAL_CMD_VEL_TOPIC=/cmd_vel_vslam_test \
+#     bash ~/ros2_ws/tools/run_manual_motion_diag.sh vslam_turn
 #
 # The two modes are deliberately separate so the robot never performs an
 # unexpected second movement.  "linear" commands about 9 cm forward.
@@ -17,19 +21,38 @@
 set -u
 
 mode="${1:-}"
+cmd_vel_topic="${MANUAL_CMD_VEL_TOPIC:-/cmd_vel_test}"
 case "$mode" in
   linear)
     command_seconds="1.5"
+    message_count="30"
+    publisher_timeout_seconds="10"
     twist="{linear: {x: 0.06, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}"
     expectation="车体物理正前方约 9 cm；/wheel/odom 的 x 应增加"
     ;;
   turn)
     command_seconds="2.0"
+    message_count="40"
+    publisher_timeout_seconds="10"
     twist="{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.18}}"
     expectation="原地向左（逆时针）约 21 度；/wheel/odom 的 yaw 应增加"
     ;;
+  vslam_linear)
+    command_seconds="8.0"
+    message_count="160"
+    publisher_timeout_seconds="16"
+    twist="{linear: {x: 0.07, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}"
+    expectation="VSLAM 动态验收：车体物理正前方约 0.56 m；必须在空旷区域执行"
+    ;;
+  vslam_turn)
+    command_seconds="6.5"
+    message_count="130"
+    publisher_timeout_seconds="15"
+    twist="{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.12}}"
+    expectation="VSLAM 动态验收：原地向左约 45 度；必须在空旷区域执行"
+    ;;
   *)
-    echo "用法：bash ~/ros2_ws/tools/run_manual_motion_diag.sh {linear|turn}"
+    echo "用法：bash ~/ros2_ws/tools/run_manual_motion_diag.sh {linear|turn|vslam_linear|vslam_turn}"
     exit 2
     ;;
 esac
@@ -41,7 +64,7 @@ finished=0
 
 publish_zero()
 {
-  ros2 topic pub --once /cmd_vel_test geometry_msgs/msg/Twist \
+  ros2 topic pub --once "$cmd_vel_topic" geometry_msgs/msg/Twist \
     "{linear: {x: 0.0, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}" \
     >/dev/null 2>&1 || true
 }
@@ -80,9 +103,9 @@ for forbidden in /controller_server /velocity_smoother /collision_monitor /bt_na
   fi
 done
 
-topic_info="$(ros2 topic info /cmd_vel_test -v 2>&1 || true)"
+topic_info="$(ros2 topic info "$cmd_vel_topic" -v 2>&1 || true)"
 if ! grep -q 'Subscription count: 1' <<< "$topic_info"; then
-  echo "拒绝测试：/cmd_vel_test 不是恰好 1 个订阅者。"
+  echo "拒绝测试：${cmd_vel_topic} 不是恰好 1 个订阅者。"
   echo "$topic_info"
   exit 4
 fi
@@ -96,7 +119,7 @@ fi
   date --iso-8601=ns
   echo "===== nodes ====="
   printf '%s\n' "$nodes"
-  echo "===== /cmd_vel_test endpoints ====="
+  echo "===== ${cmd_vel_topic} endpoints ====="
   printf '%s\n' "$topic_info"
   echo "===== wheel odom before ====="
   timeout -s INT 3s ros2 topic echo /wheel/odom --once || true
@@ -104,6 +127,10 @@ fi
   timeout -s INT 3s ros2 topic echo /odometry/filtered --once || true
   echo "===== imu before ====="
   timeout -s INT 3s ros2 topic echo /imu/data --once || true
+  echo "===== VSLAM odometry before ====="
+  timeout -s INT 3s ros2 topic echo /visual_slam/tracking/odometry --once || true
+  echo "===== VSLAM candidate EKF before ====="
+  timeout -s INT 3s ros2 topic echo /odometry/vslam_candidate --once || true
 } > "${diag}_state.log" 2>&1
 
 # ros2 bag reads keyboard controls. Redirect stdin so a background recorder is
@@ -111,11 +138,16 @@ fi
 ros2 bag record \
   -o "$diag" \
   /manual_diag_marker \
-  /cmd_vel_test \
+  "$cmd_vel_topic" \
   /wheel_feedback \
   /wheel/odom \
   /odometry/filtered \
   /imu/data \
+  /visual_slam/tracking/odometry \
+  /visual_slam/tracking/vo_pose_covariance \
+  /visual_slam/tracking/vo_path \
+  /odometry/vslam_candidate \
+  /diagnostics \
   /scan_filtered \
   /scan_camera \
   /tf \
@@ -136,8 +168,13 @@ ros2 topic pub --once /manual_diag_marker std_msgs/msg/String \
   "{data: '${mode}_command_start'}" >/dev/null 2>&1 || true
 
 echo "开始 ${mode} 测试：${expectation}"
-timeout -s INT "${command_seconds}s" \
-  ros2 topic pub --rate 20 /cmd_vel_test geometry_msgs/msg/Twist "$twist" \
+# Count only actual 20 Hz publications, not ros2 CLI/DDS discovery startup.
+# A separate outer timeout still guarantees that a failed publisher cannot
+# leave the test running indefinitely.
+timeout -s INT "${publisher_timeout_seconds}s" \
+  ros2 topic pub --rate 20 --times "$message_count" \
+  --wait-matching-subscriptions 1 \
+  "$cmd_vel_topic" geometry_msgs/msg/Twist "$twist" \
   >/dev/null 2>&1 || true
 
 publish_zero
@@ -154,6 +191,10 @@ sleep 3
   timeout -s INT 3s ros2 topic echo /odometry/filtered --once || true
   echo "===== imu after ====="
   timeout -s INT 3s ros2 topic echo /imu/data --once || true
+  echo "===== VSLAM odometry after ====="
+  timeout -s INT 3s ros2 topic echo /visual_slam/tracking/odometry --once || true
+  echo "===== VSLAM candidate EKF after ====="
+  timeout -s INT 3s ros2 topic echo /odometry/vslam_candidate --once || true
   echo "===== date after ====="
   date --iso-8601=ns
 } >> "${diag}_state.log" 2>&1

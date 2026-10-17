@@ -36,6 +36,7 @@ class IMUDriverNode(Node):
         # 缓存 0x40 帧的原始数据，等 0x41 帧到来时一并打包发布
         self.ax, self.ay, self.az = 0.0, 0.0, 0.0
         self.gx, self.gy, self.gz = 0.0, 0.0, 0.0
+        self.invalid_frame_count = 0
         
         try:
             self.ser = serial.Serial(PORT, BAUD, timeout=0.5)
@@ -70,13 +71,20 @@ class IMUDriverNode(Node):
             # --- 解析 0x40: 提取加速度和陀螺仪 ---
             if msg_type == 0x40 and payload_len == 56:
                 data = struct.unpack('<12f2i', payload)
-                self.gx, self.gy, self.gz = data[0:3]
-                self.ax, self.ay, self.az = data[3:6]
+                motion = data[0:6]
+                if not all(math.isfinite(value) for value in motion):
+                    self.reject_nonfinite_frame('0x40 gyro/accel')
+                    continue
+                self.gx, self.gy, self.gz = motion[0:3]
+                self.ax, self.ay, self.az = motion[3:6]
                 
             # --- 解析 0x41: 提取姿态，并触发 ROS 2 发布 ---
             elif msg_type == 0x41 and payload_len == 48:
                 data = struct.unpack('<10f2i', payload)
                 roll, pitch, yaw = data[3:6]
+                if not all(math.isfinite(value) for value in (roll, pitch, yaw)):
+                    self.reject_nonfinite_frame('0x41 attitude')
+                    continue
                 
                 # 转换四元数
                 qx, qy, qz, qw = euler_to_quaternion(roll, pitch, yaw)
@@ -84,7 +92,36 @@ class IMUDriverNode(Node):
                 # 组装并发布 ROS 2 消息
                 self.publish_imu_msg(qx, qy, qz, qw)
 
+    def reject_nonfinite_frame(self, source):
+        """Drop corrupt serial frames before they can poison robot_localization."""
+        self.invalid_frame_count += 1
+        # Avoid flooding the terminal if the serial stream is temporarily corrupt.
+        if self.invalid_frame_count == 1 or self.invalid_frame_count % 100 == 0:
+            self.get_logger().warning(
+                f'Dropping non-finite IMU {source} frame '
+                f'(count={self.invalid_frame_count})')
+
     def publish_imu_msg(self, qx, qy, qz, qw):
+        finite_values = (
+            qx, qy, qz, qw,
+            self.gx, self.gy, self.gz,
+            self.ax, self.ay, self.az,
+        )
+        if not all(math.isfinite(value) for value in finite_values):
+            self.reject_nonfinite_frame('assembled message')
+            return
+
+        quaternion_norm = math.sqrt(qx*qx + qy*qy + qz*qz + qw*qw)
+        if not math.isfinite(quaternion_norm) or quaternion_norm < 1.0e-6:
+            self.reject_nonfinite_frame('quaternion')
+            return
+
+        # Normalization also protects TF consumers from small numerical drift.
+        qx /= quaternion_norm
+        qy /= quaternion_norm
+        qz /= quaternion_norm
+        qw /= quaternion_norm
+
         msg = Imu()
         
         # 1. 赋予时间戳与坐标系名称 (原汁原味的数据就在 imu_link 下)

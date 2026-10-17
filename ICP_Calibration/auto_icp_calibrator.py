@@ -8,6 +8,11 @@ import numpy as np
 import math
 import sys
 
+print(
+    "⚠️ 本工具只做二维墙面重合复核，不能估计 Z/Roll/Pitch，也不能替代靶标外参标定。\n"
+    "   相机重新安装或升高后，请先运行 tools/capture_camera_lidar_calibration.py。"
+)
+
 try:
     from scipy.spatial import KDTree
 except ImportError:
@@ -22,9 +27,9 @@ LASER_Y = 0.0
 LASER_ROLL_PI = True 
 
 # 与 src/my_robot_description/urdf/my_robot.urdf 保持一致。
-CAM_SCREW_X = 0.1434
-CAM_SCREW_Y = -0.0002
-CAM_SCREW_YAW = -0.0467
+CAM_SCREW_X = 0.146327
+CAM_SCREW_Y = -0.002217
+CAM_SCREW_YAW = -0.043870
 CAM_SCREW_ROLL_PI = True 
 
 CAM_OPTICAL_X = 0.011715

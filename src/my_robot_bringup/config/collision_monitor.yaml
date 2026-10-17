@@ -36,5 +36,7 @@ collision_monitor:
       enabled: true
     depth_scan:
       type: scan
-      topic: /scan_camera
+      # Immediate, lightly filtered stream. Costmaps use the separate
+      # multi-frame-confirmed /scan_camera topic.
+      topic: /scan_camera_safety
       enabled: true

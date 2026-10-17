@@ -1,34 +1,47 @@
 <!--
-  Phase 2 tree: select both LuckPlanner and LuckController. Do not use this
-  profile until the same goals pass the Phase 1 controller-only comparison.
+  Full custom robust tree: LuckPlanner + LuckController. A transient local
+  obstacle is handled by sampled velocity arcs first. Persistent blockage uses
+  bounded wait + global replan without blind Spin or BackUp recovery motions.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+    <RecoveryNode number_of_retries="12" name="NavigateCalmRecovery">
       <PipelineSequence name="NavigateWithReplanning">
-        <RateController hz="1.0">
+        <!--
+          V11.6 logs showed three FollowPath acknowledgement timeouts while
+          1 Hz replanning competed with mapping/costmap resize work.  The local
+          controller still reacts at 10 Hz; 0.5 Hz keeps global replanning
+          responsive without continuously replacing an otherwise good path.
+        -->
+        <RateController hz="0.5">
           <RecoveryNode number_of_retries="1" name="ComputePathToPose">
             <ComputePathToPose goal="{goal}" path="{path}" planner_id="LuckGrid"/>
-            <ClearEntireCostmap name="ClearGlobalCostmap-Context" service_name="global_costmap/clear_entirely_global_costmap"/>
+            <!-- If global planning fails, camera-only cells left outside the
+                 current field of view may be stale. Clear the global dynamic
+                 layers once, then allow fresh scans to re-mark any obstacle
+                 still present before the one bounded planning retry. Static
+                 map obstacles are restored by StaticLayer. The local costmap
+                 and Collision Monitor remain untouched. -->
+            <Sequence name="RefreshGlobalObstaclesOnNoPath">
+              <ClearEntireCostmap name="ClearGlobalCostmap-OnNoPath"
+                                  service_name="global_costmap/clear_entirely_global_costmap"/>
+              <Wait wait_duration="2"/>
+            </Sequence>
           </RecoveryNode>
         </RateController>
         <RecoveryNode number_of_retries="1" name="FollowPath">
           <FollowPath path="{path}" controller_id="LuckFollowPath"
                       goal_checker_id="general_goal_checker"/>
-          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+          <Wait wait_duration="1"/>
         </RecoveryNode>
       </PipelineSequence>
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>
-        <RoundRobin name="RecoveryActions">
-          <Sequence name="ClearingActions">
-            <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
-            <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
-          </Sequence>
-          <Spin spin_dist="1.57"/>
-          <Wait wait_duration="5"/>
-          <BackUp backup_dist="0.30" backup_speed="0.05"/>
-        </RoundRobin>
+        <!-- Twelve bounded retries provide at least 60 s of outer waiting when
+             all attempts fail, covering the observed reopening after ~27 s
+             and allowing for the earlier longer closure. GoalUpdated interrupts Wait.
+             Cancel still cancels the action. Never replay an aborted goal. -->
+        <Wait wait_duration="5"/>
       </ReactiveFallback>
     </RecoveryNode>
   </BehaviorTree>

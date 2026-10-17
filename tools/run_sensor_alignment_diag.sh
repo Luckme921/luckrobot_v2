@@ -13,8 +13,12 @@ if [[ ! -f /opt/ros/humble/setup.bash || ! -f "$workspace/install/setup.bash" ]]
   exit 2
 fi
 
+# ROS 2 Humble setup files legitimately probe variables before defining them.
+# Temporarily disable nounset so this script also works when launched directly.
+set +u
 source /opt/ros/humble/setup.bash
 source "$workspace/install/setup.bash"
+set -u
 
 stamp=$(date +%Y%m%d_%H%M%S)
 prefix="$HOME/sensor_alignment_${stamp}"

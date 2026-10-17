@@ -1,11 +1,11 @@
 <!--
-  Phase 1 A/B tree: keep the accepted SmacPlanner2D global planner and select
-  only LuckController. The recovery sequence remains identical to manual
-  navigation so a controller comparison does not also change BT behavior.
+  LuckController robust tree. The global path is refreshed at 1 Hz. A transient
+  local obstacle is handled inside LuckController first. Persistent blockage
+  uses clear + wait + replan; it deliberately avoids blind Spin and BackUp.
 -->
 <root main_tree_to_execute="MainTree">
   <BehaviorTree ID="MainTree">
-    <RecoveryNode number_of_retries="6" name="NavigateRecovery">
+    <RecoveryNode number_of_retries="4" name="NavigateCalmRecovery">
       <PipelineSequence name="NavigateWithReplanning">
         <RateController hz="1.0">
           <RecoveryNode number_of_retries="1" name="ComputePathToPose">
@@ -16,19 +16,21 @@
         <RecoveryNode number_of_retries="1" name="FollowPath">
           <FollowPath path="{path}" controller_id="LuckFollowPath"
                       goal_checker_id="general_goal_checker"/>
-          <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+          <Sequence name="ControllerCalmRecovery">
+            <ClearEntireCostmap name="ClearLocalCostmap-Context" service_name="local_costmap/clear_entirely_local_costmap"/>
+            <Wait wait_duration="1"/>
+          </Sequence>
         </RecoveryNode>
       </PipelineSequence>
       <ReactiveFallback name="RecoveryFallback">
         <GoalUpdated/>
-        <RoundRobin name="RecoveryActions">
-          <Sequence name="ClearingActions">
+        <RoundRobin name="CalmRecoveryActions">
+          <Sequence name="ClearAndReplan">
             <ClearEntireCostmap name="ClearLocalCostmap-Subtree" service_name="local_costmap/clear_entirely_local_costmap"/>
             <ClearEntireCostmap name="ClearGlobalCostmap-Subtree" service_name="global_costmap/clear_entirely_global_costmap"/>
+            <Wait wait_duration="1"/>
           </Sequence>
-          <Spin spin_dist="1.57"/>
-          <Wait wait_duration="5"/>
-          <BackUp backup_dist="0.30" backup_speed="0.05"/>
+          <Wait wait_duration="3"/>
         </RoundRobin>
       </ReactiveFallback>
     </RecoveryNode>

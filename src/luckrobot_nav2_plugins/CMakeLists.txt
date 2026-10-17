@@ -14,6 +14,7 @@ find_package(nav_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
+find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -39,6 +40,7 @@ ament_target_dependencies(${PROJECT_NAME}
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  sensor_msgs
   std_msgs
   tf2
   tf2_geometry_msgs
@@ -65,7 +67,7 @@ ament_export_include_directories(include)
 ament_export_libraries(${PROJECT_NAME})
 ament_export_dependencies(
   geometry_msgs nav2_core nav2_costmap_2d nav2_util nav_msgs pluginlib
-  rclcpp rclcpp_lifecycle std_msgs tf2 tf2_geometry_msgs tf2_ros
+  rclcpp rclcpp_lifecycle sensor_msgs std_msgs tf2 tf2_geometry_msgs tf2_ros
 )
 
 ament_package()

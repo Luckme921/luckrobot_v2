@@ -18,6 +18,36 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  scripts/vslam_odom_guard.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME vslam_odom_guard
+)
+
+install(PROGRAMS
+  scripts/vslam_stereo_monotonic_gate.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME vslam_stereo_monotonic_gate
+)
+
+install(PROGRAMS
+  scripts/depth_height_scan.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME depth_height_scan
+)
+
+install(PROGRAMS
+  scripts/scan_confirmation_filter.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME scan_confirmation_filter
+)
+
+install(PROGRAMS
+  scripts/wheel_yaw_guard.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME wheel_yaw_guard
+)
+
 if(BUILD_TESTING)
   find_package(ament_lint_auto REQUIRED)
   # the following line skips the linter which checks for copyrights
