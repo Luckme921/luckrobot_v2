@@ -132,13 +132,13 @@ struct LuckControllerTestAccess
     // Exercise configure() invariants for the explicit fast candidate, without
     // starting a chassis, TF broadcaster or publishing any velocity command.
     ros->declare_parameter("FastTest.desired_linear_vel", .40);
-    ros->declare_parameter("FastTest.max_angular_vel", .70);
-    ros->declare_parameter("FastTest.rotate_angular_vel", .50);
-    ros->declare_parameter("FastTest.rotation_breakaway_angular_vel", .50);
+    ros->declare_parameter("FastTest.max_angular_vel", .80);
+    ros->declare_parameter("FastTest.rotate_angular_vel", 4.0/7.0);
+    ros->declare_parameter("FastTest.rotation_breakaway_angular_vel", 4.0/7.0);
     ros->declare_parameter("FastTest.approach_dist", .75);
     LuckController fast;
     fast.configure(ros, "FastTest", tf, ros);
-    require(fast.max_angular_vel_ == .70 && fast.desired_linear_vel_ == .40,
+    require(fast.max_angular_vel_ == .80 && fast.desired_linear_vel_ == .40,
       "fast configuration must load without parameter invariant failures");
     fast.cleanup();
     std::cout << "PASS actual command generation: goal hold, no floor override, "

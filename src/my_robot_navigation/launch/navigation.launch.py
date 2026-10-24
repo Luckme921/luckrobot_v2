@@ -19,8 +19,8 @@ class MotionLimitedYaml(RewrittenYaml):
         if not math.isfinite(speed) or not 0.0 < speed <= 0.40:
             raise ValueError('motion_speed_limit must be in (0, 0.40] m/s')
         yaw = float(LaunchConfiguration('motion_angular_limit', default='0.35').perform(context))
-        if not math.isfinite(yaw) or not 0.0 < yaw <= 0.70:
-            raise ValueError('motion_angular_limit must be in (0, 0.70] rad/s')
+        if not math.isfinite(yaw) or not 0.0 < yaw <= 0.80:
+            raise ValueError('motion_angular_limit must be in (0, 0.80] rad/s')
         source = super().perform(context)
         with open(source, encoding='utf-8') as stream:
             data = yaml.safe_load(stream)
@@ -35,6 +35,13 @@ class MotionLimitedYaml(RewrittenYaml):
                     # boost it beyond that to the full tracking yaw maximum.
                     config['rotation_breakaway_angular_vel'] = min(
                         yaw, max(0.35, config['rotate_angular_vel']))
+                    # Match the controller's complete coasting/braking rollout
+                    # budget. Raising yaw must not silently invalidate all arcs.
+                    horizon = (config['collision_horizon'] + config['motion_response_delay'] +
+                               max(speed/config['linear_braking_decel'],
+                                   yaw/config['rotate_braking_decel']) + 0.05)
+                    if not math.isfinite(horizon) or horizon > 6.0:
+                        raise ValueError('Requested limits exceed complete braking rollout budget')
                 if speed > 0.30:
                     # More approach distance, not an invented stronger brake.
                     if 'approach_dist' in config:
@@ -165,7 +172,7 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('motion_angular_limit', default_value='0.35',
-                              description='Shared tracking yaw cap; fast candidate upper bound 0.70'),
+                              description='Shared tracking yaw cap; candidate upper bound 0.80'),
         DeclareLaunchArgument('motion_speed_limit', default_value='0.30',
                               description='Shared forward limit for controller, smoother and guard'),
         declare_use_slam_cmd,

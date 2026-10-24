@@ -53,7 +53,20 @@ assert smooth['max_velocity'] == [.4,0.,.7]
 assert smooth['min_velocity'][2] == -.7
 assert smooth['max_accel'] == [.2,0.,.3]
 pathlib.Path(result).unlink()
-for yaw in ('0', '-1', 'nan', 'inf', '.71'):
+context.launch_configurations['motion_angular_limit'] = '0.80'
+result = module.MotionLimitedYaml(source_file=str(source), root_key='',
+                                 param_rewrites={}).perform(context)
+data = yaml.safe_load(pathlib.Path(result).read_text())
+luck = data['controller_server']['ros__parameters']['LuckFollowPath']
+assert luck['max_angular_vel'] == .80
+assert abs(luck['rotate_angular_vel'] - 4/7) < 1e-10
+assert luck['rotation_breakaway_angular_vel'] == luck['rotate_angular_vel']
+assert data['velocity_smoother']['ros__parameters']['max_velocity'][2] == .80
+assert data['velocity_smoother']['ros__parameters']['min_velocity'][2] == -.80
+assert luck['rotate_braking_decel'] == .20
+assert luck['collision_horizon'] + luck['motion_response_delay'] + .8/.2 + .05 <= 6
+pathlib.Path(result).unlink()
+for yaw in ('0', '-1', 'nan', 'inf', '.81'):
     context.launch_configurations['motion_angular_limit'] = yaw
     try:
         module.MotionLimitedYaml(source_file=str(source), root_key='',
