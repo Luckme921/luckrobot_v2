@@ -228,6 +228,7 @@ ros2 bag record \
   /imu/data \
   /scan_filtered \
   /scan_camera_safety \
+    /scan_camera_clear \
   /scan_camera \
   /tf \
   /tf_static \

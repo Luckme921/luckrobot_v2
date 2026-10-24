@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace as NS
 import unittest
 import numpy as np
+import yaml
 
 SOURCE = Path(__file__).resolve().parents[1] / 'src/my_robot_bringup/scripts/scan_confirmation_filter.py'
 tree = ast.parse(SOURCE.read_text(encoding='utf-8'))
@@ -37,6 +38,7 @@ class Harness:
         for k in ['frames_received','frames_published','last_input_beams','input_beams',
                   'last_confirmed_beams','confirmed_beams']:setattr(self,k,0)
         self.publisher = NS(publish=lambda m: setattr(self,'output',m))
+        self.clearing_publisher = NS(publish=lambda m: setattr(self,'clearing',m))
     def empty_copy(self,m):
         return NS(header=m.header,ranges=[math.inf]*len(m.ranges),intensities=[])
     def lookup_transform(self,*args):return NS(),False
@@ -50,6 +52,40 @@ class Harness:
         return int(np.isfinite(self.output.ranges).sum())
 
 class Tests(unittest.TestCase):
+    def test_costmaps_use_clear_only_finite_channel(self):
+        params=yaml.safe_load((SOURCE.parents[2]/'my_robot_navigation/config/nav2_params.yaml').read_text())
+        for name in ('global_costmap','local_costmap'):
+            layer=params[name][name]['ros__parameters']['camera_obstacle_layer']
+            self.assertIn('camera_clear',layer['observation_sources'].split())
+            clear=layer['camera_clear']
+            self.assertTrue(clear['clearing'])
+            self.assertFalse(clear['marking'])
+            self.assertFalse(clear['inf_is_valid'])
+            self.assertEqual(clear['observation_persistence'],0.0)
+            self.assertEqual(clear['topic'],'/scan_camera_clear')
+            self.assertTrue(layer['camera']['marking'])
+
+    def test_finite_background_clears_without_temporal_marking(self):
+        h=Harness()
+        self.assertEqual(h.feed([2.]*12),0)
+        self.assertEqual(list(h.clearing.ranges),[2.]*12)
+        for _ in range(3):self.assertEqual(h.feed([2.]*12),0)
+        self.assertEqual(h.feed([2.]*12),12)
+
+    def test_no_depth_or_small_clusters_never_generate_clearing(self):
+        h=Harness()
+        h.feed([math.inf]*12)
+        self.assertFalse(np.isfinite(h.clearing.ranges).any())
+        h.feed([1.]*3)
+        self.assertFalse(np.isfinite(h.clearing.ranges).any())
+
+    def test_missing_transform_never_publishes_clearing(self):
+        h=Harness()
+        h.feed([math.inf]*12)
+        h.lookup_transform=lambda *args:(None,False)
+        h.feed([2.]*12)
+        self.assertFalse(np.isfinite(h.clearing.ranges).any())
+
     def test_latest_tf_fallback_is_bounded(self):
         for skew, expected in ((.10,True), (.21,False), (5.,False)):
             h=Harness()

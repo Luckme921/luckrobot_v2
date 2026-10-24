@@ -243,7 +243,9 @@ controller_server:
       rotate_angular_vel: 0.25
       # 兼容旧配置保留；当前禁止最低转速覆盖刹停包络。
       min_rotate_angular_vel: 0.08
-      lookahead_dist: 0.35
+      lookahead_dist: 0.40
+      # 2026-10-24 190648: small straight-line corrections; soften only the
+      # normal lookahead. Tight-corner minimum remains .16 m below.
       # V11.8：直线仍使用 0.35 m；当近端与远端路径方向不一致时，连续缩短
       # 到 0.12 m，避免 Pure Pursuit 跨过近端急弯后抄近路撞向内侧障碍物。
       # V12.13.1：322 s 实车包显示，0.12 m 短前视会放大缓存路线入口处的
@@ -380,7 +382,17 @@ global_costmap:
         plugin: "luckrobot_nav2_plugins::PersistentCameraLayer"
         enabled: True
         combination_method: 1
-        observation_sources: camera
+        observation_sources: camera camera_clear
+        camera_clear:
+          topic: /scan_camera_clear
+          data_type: "LaserScan"
+          clearing: True
+          marking: False
+          inf_is_valid: False
+          observation_persistence: 0.0
+          max_obstacle_height: 2.0
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.25
         camera:
           topic: /scan_camera
           max_obstacle_height: 2.0
@@ -443,7 +455,17 @@ local_costmap:
         plugin: "nav2_costmap_2d::ObstacleLayer"
         enabled: True
         combination_method: 1
-        observation_sources: camera
+        observation_sources: camera camera_clear
+        camera_clear:
+          topic: /scan_camera_clear
+          data_type: "LaserScan"
+          clearing: True
+          marking: False
+          inf_is_valid: False
+          observation_persistence: 0.0
+          max_obstacle_height: 2.0
+          raytrace_max_range: 3.0
+          raytrace_min_range: 0.25
         camera:
           topic: /scan_camera
           max_obstacle_height: 2.0

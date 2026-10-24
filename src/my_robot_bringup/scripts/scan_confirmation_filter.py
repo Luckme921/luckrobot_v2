@@ -27,6 +27,7 @@ class ScanConfirmationFilter(Node):
         super().__init__('camera_scan_confirmation')
         self.declare_parameter('input_topic', '/scan_camera_safety')
         self.declare_parameter('output_topic', '/scan_camera')
+        self.declare_parameter('clearing_topic', '/scan_camera_clear')
         self.declare_parameter('fixed_frame', 'odom')
         self.declare_parameter('confirmation_frames', 5)
         self.declare_parameter('history_duration', 0.50)
@@ -80,6 +81,9 @@ class ScanConfirmationFilter(Node):
         )
         self.publisher = self.create_publisher(
             LaserScan, str(self.get_parameter('output_topic').value), output_qos
+        )
+        self.clearing_publisher = self.create_publisher(
+            LaserScan, str(self.get_parameter('clearing_topic').value), output_qos
         )
         self.subscription = self.create_subscription(
             LaserScan,
@@ -278,6 +282,7 @@ class ScanConfirmationFilter(Node):
         self.input_beams += self.last_input_beams
         if valid_indices.size == 0:
             self.publisher.publish(output)
+            self.clearing_publisher.publish(self.empty_copy(message))
             self.frames_published += 1
             return
 
@@ -286,7 +291,18 @@ class ScanConfirmationFilter(Node):
         )
         if transform is None:
             self.history.clear()
+            self.clearing_publisher.publish(self.empty_copy(message))
             return
+
+        # Latest spatially supported FINITE returns may clear the ray before
+        # their measured endpoint without waiting for temporal marking votes.
+        # Missing depth remains inf; consumers must keep inf_is_valid false.
+        # This stream must never be used for obstacle marking.
+        clearing = self.empty_copy(message)
+        clearing_ranges = np.full(ranges.size, math.inf, dtype=np.float32)
+        clearing_ranges[valid_indices] = ranges[valid_indices]
+        clearing.ranges = clearing_ranges.tolist()
+        self.clearing_publisher.publish(clearing)
 
         # Keep the measurement timestamp. Points are still in the sensor/base
         # frame at capture time; a fallback used only for confirmation must not
