@@ -74,6 +74,16 @@ ament_export_dependencies(
 
 if(BUILD_TESTING)
   enable_testing()
+  add_executable(test_path_rounding ../../tools/test_path_rounding.cpp)
+  target_include_directories(test_path_rounding PRIVATE include)
+  target_compile_features(test_path_rounding PRIVATE cxx_std_17)
+  add_test(NAME path_rounding COMMAND test_path_rounding)
+  add_executable(test_planner_rounding ../../tools/test_planner_rounding.cpp)
+  target_link_libraries(test_planner_rounding ${PROJECT_NAME})
+  ament_target_dependencies(test_planner_rounding nav2_costmap_2d)
+  add_test(NAME planner_rounding COMMAND test_planner_rounding)
+  set_tests_properties(planner_rounding PROPERTIES
+    ENVIRONMENT "ROS_DOMAIN_ID=191;ROS_LOCALHOST_ONLY=1" TIMEOUT 30)
   add_executable(test_corner_speed ../../tools/test_corner_speed.cpp)
   target_include_directories(test_corner_speed PRIVATE include)
   target_compile_features(test_corner_speed PRIVATE cxx_std_17)

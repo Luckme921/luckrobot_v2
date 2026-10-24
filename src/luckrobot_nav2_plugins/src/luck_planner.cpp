@@ -1,4 +1,5 @@
 #include "luckrobot_nav2_plugins/luck_planner.hpp"
+#include "luckrobot_nav2_plugins/path_rounding.hpp"
 
 #include <algorithm>
 #include <array>
@@ -14,6 +15,7 @@
 
 #include "nav2_core/exceptions.hpp"
 #include "nav2_costmap_2d/cost_values.hpp"
+#include "nav2_costmap_2d/footprint_collision_checker.hpp"
 #include "nav2_util/node_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/LinearMath/Quaternion.h"
@@ -86,6 +88,10 @@ void LuckPlanner::configure(
     node, plugin_name_ + ".smoothing_max_cost", rclcpp::ParameterValue(smoothing_max_cost_));
   declare_parameter_if_not_declared(
     node, plugin_name_ + ".max_iterations", rclcpp::ParameterValue(max_iterations_));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".corner_rounding_enabled",
+    rclcpp::ParameterValue(corner_rounding_enabled_));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".corner_rounding_distance",
+    rclcpp::ParameterValue(corner_rounding_distance_));
   declare_parameter_if_not_declared(
     node, plugin_name_ + ".route_hysteresis_enabled",
     rclcpp::ParameterValue(route_hysteresis_enabled_));
@@ -108,6 +114,8 @@ void LuckPlanner::configure(
   node->get_parameter(plugin_name_ + ".max_planning_cost", max_planning_cost_);
   node->get_parameter(plugin_name_ + ".smoothing_max_cost", smoothing_max_cost_);
   node->get_parameter(plugin_name_ + ".max_iterations", max_iterations_);
+  node->get_parameter(plugin_name_ + ".corner_rounding_enabled", corner_rounding_enabled_);
+  node->get_parameter(plugin_name_ + ".corner_rounding_distance", corner_rounding_distance_);
   node->get_parameter(
     plugin_name_ + ".route_hysteresis_enabled", route_hysteresis_enabled_);
   node->get_parameter(
@@ -118,7 +126,9 @@ void LuckPlanner::configure(
   node->get_parameter(
     plugin_name_ + ".route_reuse_start_tolerance", route_reuse_start_tolerance_);
 
-  if (tolerance_ < 0.0 || interpolation_resolution_ <= 0.0 ||
+  if (!std::isfinite(corner_rounding_distance_) || corner_rounding_distance_ < 0.0 ||
+    corner_rounding_distance_ > 0.40 ||
+    tolerance_ < 0.0 || interpolation_resolution_ <= 0.0 ||
     max_planning_cost_ < 0 || max_planning_cost_ > 252 ||
     smoothing_max_cost_ < 0 || smoothing_max_cost_ > max_planning_cost_ ||
     max_iterations_ <= 0 || route_reuse_goal_tolerance_ < 0.0 ||
@@ -285,19 +295,20 @@ bool LuckPlanner::buildReusablePath(
     return false;
   }
 
-  // A newly observed obstacle must invalidate the old route immediately.
-  // The cached route is densely sampled at interpolation_resolution_, so
-  // checking every remaining pose also checks every traversed costmap cell.
+  // Validate segments, not just vertices: even dense samples can straddle a
+  // newly occupied cell or diagonal corner after rounding / map resizing.
+  Cell previous = nearest_cell;
   for (std::size_t i = nearest_index; i < cached_path_.poses.size(); ++i) {
     unsigned int mx = 0;
     unsigned int my = 0;
     if (!costmap_->worldToMap(
         cached_path_.poses[i].pose.position.x,
         cached_path_.poses[i].pose.position.y, mx, my) ||
-      !isTraversable(mx, my))
+      !isTraversable(mx, my) || !lineIsTraversable(previous, Cell{mx, my}))
     {
       return false;
     }
+    previous = Cell{mx, my};
   }
 
   cached_progress_index_ = nearest_index;
@@ -593,17 +604,7 @@ nav_msgs::msg::Path LuckPlanner::cellsToPath(
     double wx = 0.0;
     double wy = 0.0;
     costmap_->mapToWorld(cells[i].x, cells[i].y, wx, wy);
-    const double start_x = points.back().first;
-    const double start_y = points.back().second;
-    const double length = std::hypot(wx - start_x, wy - start_y);
-    const int samples = std::max(
-      1, static_cast<int>(std::ceil(length / interpolation_resolution_)));
-    for (int sample = 1; sample <= samples; ++sample) {
-      const double ratio = static_cast<double>(sample) / static_cast<double>(samples);
-      points.emplace_back(
-        start_x + ratio * (wx - start_x),
-        start_y + ratio * (wy - start_y));
-    }
+    points.emplace_back(wx, wy);
   }
 
   unsigned int requested_goal_x = 0;
@@ -617,6 +618,47 @@ nav_msgs::msg::Path LuckPlanner::cellsToPath(
     points.back() = {goal.pose.position.x, goal.pose.position.y};
   }
 
+  if (corner_rounding_enabled_) {
+    nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(costmap_);
+    const auto footprint = costmap_ros_->getRobotFootprint();
+    std::vector<path_rounding::Point> sparse;
+    for (const auto & p : points) {sparse.push_back({p.first,p.second});}
+    const auto rounded = path_rounding::round(sparse, corner_rounding_distance_,
+      std::min(interpolation_resolution_,costmap_->getResolution()*.25),
+      [&](path_rounding::Point a, path_rounding::Point b) {
+        Cell ca,cb;
+        if (!costmap_->worldToMap(a.x,a.y,ca.x,ca.y) ||
+          !costmap_->worldToMap(b.x,b.y,cb.x,cb.y) || !lineIsClear(ca,cb) ||
+          footprint.size()<3) {return false;}
+        const double yaw=std::atan2(b.y-a.y,b.x-a.x);
+        const int n=std::max(1,static_cast<int>(std::ceil(
+          path_rounding::distance(a,b)/(costmap_->getResolution()*.5))));
+        for (int j=0;j<=n;++j) {
+          const double t=static_cast<double>(j)/n;
+          const double cost=checker.footprintCostAtPose(
+            a.x+t*(b.x-a.x),a.y+t*(b.y-a.y),yaw,footprint);
+          if (!std::isfinite(cost) || cost<0 || cost>=nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE) {
+            return false;
+          }
+        }
+        return true;
+      });
+    points.clear();
+    for (const auto & p : rounded) {points.emplace_back(p.x,p.y);}
+  }
+  std::vector<std::pair<double,double>> dense{points.front()};
+  const double spacing=std::min(interpolation_resolution_,costmap_->getResolution()*.5);
+  for (size_t i=1;i<points.size();++i) {
+    const auto a=points[i-1], b=points[i];
+    const double length=std::hypot(b.first-a.first,b.second-a.second);
+    if (length<1e-9) {continue;}
+    const int n=std::max(1,static_cast<int>(std::ceil(length/spacing)));
+    for (int j=1;j<=n;++j) {
+      const double t=static_cast<double>(j)/n;
+      dense.emplace_back(a.first+t*(b.first-a.first),a.second+t*(b.second-a.second));
+    }
+  }
+  points=std::move(dense);
   path.poses.reserve(points.size());
   for (std::size_t i = 0; i < points.size(); ++i) {
     geometry_msgs::msg::PoseStamped pose;

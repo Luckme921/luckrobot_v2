@@ -39,6 +39,7 @@ public:
     const geometry_msgs::msg::PoseStamped & goal) override;
 
 private:
+  friend struct LuckPlannerTestAccess;
   struct Cell
   {
     unsigned int x{0};
@@ -80,6 +81,8 @@ private:
   double cost_penalty_{5.0};
   double turn_penalty_{0.20};
   double interpolation_resolution_{0.05};
+  bool corner_rounding_enabled_{true};
+  double corner_rounding_distance_{0.25};
   int max_iterations_{1000000};
   bool route_hysteresis_enabled_{true};
   double route_reuse_goal_tolerance_{0.15};

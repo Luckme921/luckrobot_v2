@@ -137,6 +137,9 @@ planner_server:
       # V11.5：实测停止点的中心代价仅 153/173，但预测 footprint 已撞到
       # 254。收紧直视化简阈值，避免平滑后的长线段切过拐角内侧。
       smoothing_max_cost: 100
+      # Round only observed-free corners; retain original route if checks fail.
+      corner_rounding_enabled: true
+      corner_rounding_distance: 0.25
       interpolation_resolution: 0.05
       max_iterations: 1000000
       # V12.13: periodic replanning may discover a high obstacle and choose a
