@@ -642,9 +642,17 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
       }
     } else {
       const double heading_scale = clamp(std::cos(std::abs(angle_to_carrot)), 0.25, 1.0);
-      const double curvature_scale = clamp(
-        1.0 / (1.0 + curvature_speed_gain_ * std::abs(curvature)), 0.30, 1.0);
       const double remaining = std::max(distance_to_goal, target.remaining_path);
+      // Modestly relax redundant curvature slowing only during cruise arcs.
+      // Blend across the approach boundary; terminal approach and in-place
+      // rotation retain their accepted behavior. All predictive braking,
+      // yaw, tracking-error, cost and collision bounds still apply below.
+      const double cruise_blend = clamp(
+        (remaining - approach_dist_) / 0.25, 0.0, 1.0);
+      const double effective_curvature_gain = curvature_speed_gain_ *
+        (1.0 - 0.15 * cruise_blend);
+      const double curvature_scale = clamp(
+        1.0 / (1.0 + effective_curvature_gain * std::abs(curvature)), 0.30, 1.0);
       const double approach_ratio = clamp(
         (remaining - active_position_tolerance) /
         std::max(approach_dist_ - active_position_tolerance, 1.0e-3), 0.0, 1.0);
