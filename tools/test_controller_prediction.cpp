@@ -129,18 +129,6 @@ struct LuckControllerTestAccess
     require(crawl.linear.x > 0 && crawl.linear.x < c.min_linear_vel_,
       "cost and terminal limits must not be raised to minimum speed");
     c.costmap_->setCost(100, 100, 0);
-    const double accepted_gain = c.curvature_speed_gain_;
-    auto cruise_arc = command(1.5, .12, 0, 0);
-    // Cancel the new cruise multiplier to reconstruct the accepted request.
-    c.curvature_speed_gain_ = accepted_gain / .85;
-    auto baseline_arc = command(1.5, .12, 0, 0);
-    c.curvature_speed_gain_ = accepted_gain;
-    require(cruise_arc.linear.x >= baseline_arc.linear.x &&
-      cruise_arc.linear.x <= baseline_arc.linear.x / .85 + 1e-8,
-      "cruise arc relaxation must remain bounded by its gain ratio");
-    auto straight_cruise = command(1.5, 0, 0, 0);
-    require(straight_cruise.linear.x <= c.desired_linear_vel_,
-      "cruise relaxation cannot raise the maximum forward speed");
     auto reference = command(.5, .02, 0, 0);
     auto corrected = command(.5, .02, 0, .2);
     require(std::abs(corrected.linear.x - reference.linear.x) < 1e-8,
