@@ -2,6 +2,7 @@
 #include <nav2_costmap_2d/obstacle_layer.hpp>
 #include <utility>
 #include <vector>
+#include <nav_msgs/msg/occupancy_grid.hpp>
 
 namespace luckrobot_nav2_plugins
 {
@@ -10,6 +11,9 @@ namespace luckrobot_nav2_plugins
 class PersistentCameraLayer : public nav2_costmap_2d::ObstacleLayer
 {
 public:
+  void onInitialize() override;
+  void updateCosts(nav2_costmap_2d::Costmap2D & master, int min_i, int min_j,
+    int max_i, int max_j) override;
   void matchSize() override;
   void reset() override
   {
@@ -17,6 +21,8 @@ public:
     nav2_costmap_2d::ObstacleLayer::reset();
   }
 private:
+  rclcpp::Publisher<nav_msgs::msg::OccupancyGrid>::SharedPtr debug_pub_;
+  double last_debug_seconds_{-1.0};
   std::vector<std::pair<double, double>> anchors_;
 };
 }

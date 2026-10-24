@@ -91,7 +91,8 @@ struct LuckControllerTestAccess
     c.activate();
     // Isolate command algebra here; collision acceptance was tested above.
     c.use_collision_detection_ = false;
-    auto command = [&](double gx, double gy, double goal_yaw, double actual_yaw_rate) {
+    auto command = [&](double gx, double gy, double goal_yaw, double actual_yaw_rate,
+      bool force_alignment = false) {
         nav_msgs::msg::Path plan;
         plan.header.frame_id = "odom";
         plan.poses = {pose, pose};
@@ -100,6 +101,7 @@ struct LuckControllerTestAccess
         plan.poses.back().pose.orientation.z = std::sin(goal_yaw / 2);
         plan.poses.back().pose.orientation.w = std::cos(goal_yaw / 2);
         c.setPlan(plan);
+        if (force_alignment) {c.rotate_mode_ = true;}
         pose.header.stamp = ros->now();
         geometry_msgs::msg::Twist velocity;
         velocity.linear.x = .15;
@@ -120,6 +122,15 @@ struct LuckControllerTestAccess
       "small yaw correction preserves forward request");
     require(corrected.angular.z < reference.angular.z,
       "measured positive yaw unwinds steering early");
+    auto settling = command(.5, .035, 0, .20, true);
+    require(settling.linear.x == 0 && settling.angular.z == 0,
+      "aligned heading must brake residual yaw before translating");
+    auto aligned = command(.5, .035, 0, .05, true);
+    require(aligned.linear.x > 0,
+      "aligned and slow yaw releases forward tracking");
+    auto still_aligning = command(.5, .07, 0, .05, true);
+    require(still_aligning.linear.x == 0 && still_aligning.angular.z > 0,
+      "eight degree residual must remain in alignment");
     // setPlan may reset the still timer; trigger breakaway via zero delay.
     c.rotation_breakaway_delay_ = 0;
     c.execution_imu_received_seconds_ = ros->now().seconds();

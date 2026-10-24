@@ -87,6 +87,7 @@ void LuckController::configure(
   declare_double("goal_yaw_tolerance", goal_yaw_tolerance_);
   declare_double("rotate_enter_angle", rotate_enter_angle_);
   declare_double("rotate_exit_angle", rotate_exit_angle_);
+  declare_double("rotate_exit_yaw_rate", rotate_exit_yaw_rate_);
   declare_double("hard_rotate_angle", hard_rotate_angle_);
   declare_double("rotate_gain", rotate_gain_);
   declare_double("rotate_braking_decel", rotate_braking_decel_);
@@ -165,6 +166,12 @@ void LuckController::configure(
   node->get_parameter(plugin_name_ + ".goal_yaw_tolerance", goal_yaw_tolerance_);
   node->get_parameter(plugin_name_ + ".rotate_enter_angle", rotate_enter_angle_);
   node->get_parameter(plugin_name_ + ".rotate_exit_angle", rotate_exit_angle_);
+  node->get_parameter(plugin_name_ + ".rotate_exit_yaw_rate", rotate_exit_yaw_rate_);
+  if (!std::isfinite(rotate_exit_yaw_rate_) || rotate_exit_yaw_rate_ <= 0.0 ||
+    rotate_exit_yaw_rate_ > 0.2)
+  {
+    throw std::runtime_error("rotate_exit_yaw_rate must be in (0, 0.2]");
+  }
   node->get_parameter(plugin_name_ + ".hard_rotate_angle", hard_rotate_angle_);
   node->get_parameter(plugin_name_ + ".rotate_gain", rotate_gain_);
   node->get_parameter(plugin_name_ + ".rotate_braking_decel", rotate_braking_decel_);
@@ -593,7 +600,8 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
     // Do not restart minimum-speed translation while waiting for GoalChecker.
     rotate_mode_ = false;
   } else {
-    if (rotate_mode_ && std::abs(angle_to_carrot) <= rotate_exit_angle_) {
+    if (rotate_mode_ && std::abs(angle_to_carrot) <= rotate_exit_angle_ &&
+      std::abs(measured_angular_) <= rotate_exit_yaw_rate_) {
       rotate_mode_ = false;
     }
     if (!rotate_mode_ &&
@@ -606,13 +614,14 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
 
     if (rotate_mode_) {
       // The old controller held rotate_angular_vel_ until very close to the
-      // 8.6 degree exit boundary.  velocity_smoother plus the chassis' own
+      // exit boundary. velocity_smoother plus the chassis' own
       // ramp then kept physical yaw velocity after the command changed, which
       // produced the measured left/right corrections after a 180 degree turn.
       // Treat the exit boundary as the end of the in-place phase and apply a
       // conservative stopping-speed envelope before it.  Small residual error
       // is still corrected continuously while driving; this does not add a
-      // second acceleration-rate limiter or a settle pause.
+      // second acceleration-rate limiter. Forward release also requires low
+      // measured yaw to avoid carrying residual rotation into the straight.
       const double rotate_error_margin =
         std::max(0.0, std::abs(angle_to_carrot) - 0.5 * rotate_exit_angle_);
       const double rotate_braking_limit = motion_prediction::stoppingSpeed(
@@ -625,6 +634,12 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
       angular = std::copysign(
         std::min(rotate_gain_ * std::abs(angle_to_carrot), rotate_angular_limit),
         angle_to_carrot);
+      if (std::abs(angle_to_carrot) <= rotate_exit_angle_) {
+        // Heading is aligned but physical yaw has not settled. Brake rotation
+        // before releasing forward motion; never boost breakaway in this phase.
+        angular = 0.0;
+        rotation_speed_limit = 0.0;
+      }
     } else {
       const double heading_scale = clamp(std::cos(std::abs(angle_to_carrot)), 0.25, 1.0);
       const double curvature_scale = clamp(

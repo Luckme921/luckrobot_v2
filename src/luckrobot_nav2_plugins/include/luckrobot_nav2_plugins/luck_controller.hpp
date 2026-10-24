@@ -180,7 +180,8 @@ private:
   double goal_position_tolerance_{0.08};
   double goal_yaw_tolerance_{0.10};
   double rotate_enter_angle_{0.45};
-  double rotate_exit_angle_{0.15};
+  double rotate_exit_angle_{0.08};
+  double rotate_exit_yaw_rate_{0.12};
   double hard_rotate_angle_{0.80};
   double rotate_gain_{1.0};
   // Conservative physical deceleration used to start slowing an in-place turn

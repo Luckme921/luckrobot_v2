@@ -229,6 +229,7 @@ ros2 bag record \
   /scan_filtered \
   /scan_camera_safety \
     /scan_camera_clear \
+    /diagnostics/global_camera_obstacle_grid \
   /scan_camera \
   /tf \
   /tf_static \

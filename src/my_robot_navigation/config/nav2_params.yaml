@@ -261,9 +261,10 @@ controller_server:
       goal_rotate_dist: 0.08
       goal_position_tolerance: 0.08
       goal_yaw_tolerance: 0.10
-      # 起步大角度才进入原地转向；8.6°退出，形成迟滞带。
+      # 起步大角度才进入原地转向；4.6°且残余角速度足够小时退出。
       rotate_enter_angle: 0.45
-      rotate_exit_angle: 0.15
+      rotate_exit_angle: 0.08
+      rotate_exit_yaw_rate: 0.12
       # 已经在移动时，小于约46°的偏差使用 v+w 连续修正，不停车切换。
       hard_rotate_angle: 0.80
       rotate_gain: 1.0

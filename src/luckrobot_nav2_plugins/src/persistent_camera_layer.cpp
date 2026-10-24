@@ -4,6 +4,45 @@
 
 namespace luckrobot_nav2_plugins
 {
+void PersistentCameraLayer::onInitialize()
+{
+  nav2_costmap_2d::ObstacleLayer::onInitialize();
+  auto node = node_.lock();
+  if (node) {
+    debug_pub_ = node->create_publisher<nav_msgs::msg::OccupancyGrid>(
+      "/diagnostics/global_camera_obstacle_grid", rclcpp::QoS(1).transient_local());
+  }
+}
+
+void PersistentCameraLayer::updateCosts(nav2_costmap_2d::Costmap2D & master,
+  int min_i, int min_j, int max_i, int max_j)
+{
+  nav2_costmap_2d::ObstacleLayer::updateCosts(master, min_i, min_j, max_i, max_j);
+  auto node = node_.lock();
+  if (!node || !debug_pub_) {return;}
+  const auto now = node->now();
+  if (last_debug_seconds_ >= 0 && now.seconds() >= last_debug_seconds_ &&
+    now.seconds() - last_debug_seconds_ < 1.0) {return;}
+  last_debug_seconds_ = now.seconds();
+  nav_msgs::msg::OccupancyGrid grid;
+  grid.header.stamp = now;
+  grid.header.frame_id = layered_costmap_->getGlobalFrameID();
+  {
+    std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*getMutex());
+    grid.info.resolution = resolution_;
+    grid.info.width = size_x_; grid.info.height = size_y_;
+    grid.info.origin.position.x = origin_x_; grid.info.origin.position.y = origin_y_;
+    grid.info.origin.orientation.w = 1.0;
+    grid.data.resize(size_x_ * size_y_);
+    for (size_t i = 0; i < grid.data.size(); ++i) {
+      const auto cost = costmap_[i];
+      grid.data[i] = cost == nav2_costmap_2d::NO_INFORMATION ? -1 :
+        (cost == nav2_costmap_2d::LETHAL_OBSTACLE ? 100 : 0);
+    }
+  }
+  debug_pub_->publish(grid);
+}
+
 void PersistentCameraLayer::matchSize()
 {
   std::lock_guard<nav2_costmap_2d::Costmap2D::mutex_t> lock(*getMutex());
