@@ -111,6 +111,19 @@ struct LuckControllerTestAccess
     auto stopped = command(.06, 0, 0, 0);
     require(stopped.linear.x == 0 && stopped.angular.z == 0,
       "goal tolerance must not restart creep");
+    c.desired_linear_vel_ = .40;
+    c.approach_dist_ = .75;
+    auto terminal_request = command(.15, 0, 0, 0);
+    const double old_terminal = c.min_linear_vel_ +
+      (.40-c.min_linear_vel_)*(.15-.08)/(.75-.08);
+    require(terminal_request.linear.x > old_terminal &&
+      terminal_request.linear.x <= old_terminal+.020001,
+      "terminal request boost is small and applied before safety bounds");
+    auto outside_terminal = command(.30, 0, 0, 0);
+    const double old_outside = c.min_linear_vel_ +
+      (.40-c.min_linear_vel_)*(.30-.08)/(.75-.08);
+    require(std::abs(outside_terminal.linear.x-old_outside)<1e-8,
+      "terminal boost must not change the earlier approach segment");
     c.costmap_->setCost(100, 100, 240);
     auto crawl = command(.081, 0, 0, 0);
     require(crawl.linear.x > 0 && crawl.linear.x < c.min_linear_vel_,

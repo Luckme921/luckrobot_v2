@@ -648,8 +648,15 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
       const double approach_ratio = clamp(
         (remaining - active_position_tolerance) /
         std::max(approach_dist_ - active_position_tolerance, 1.0e-3), 0.0, 1.0);
+      // Small terminal-only request boost: avoid prolonged creeping in the
+      // final 25 cm. Applied BEFORE all braking, curvature, cost and collision
+      // bounds, never as a minimum speed overriding those bounds.
+      const double terminal_blend = clamp(
+        (0.25 - remaining) / std::max(0.25 - active_position_tolerance, 1.0e-3),
+        0.0, 1.0);
       const double approach_speed = min_linear_vel_ +
-        (desired_linear_vel_ - min_linear_vel_) * approach_ratio;
+        (desired_linear_vel_ - min_linear_vel_) * approach_ratio +
+        0.02 * terminal_blend;
 
       linear = std::min(desired_linear_vel_, approach_speed) * heading_scale * curvature_scale;
       const double stopping_limit = motion_prediction::stoppingSpeed(
