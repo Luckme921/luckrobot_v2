@@ -30,5 +30,13 @@ int main()
   check(f({{0,0},{1,0},{0,0}},.95)<.1); // hairpin cannot masquerade as straight
   check(f({{0,0},{0,0},{0,0}},0)==.30);
   check(f({{0,0},{1,0},{1,1},{2,1}},.8)<.15);
+  for (int i=0;i<190;++i) {
+    const double s=i*.01;
+    const double fast=limit(left,s,.40,.70,.35,.25);
+    check(fast>=0 && fast<=.40);
+    check(std::abs(fast-limit(right,s,.40,.70,.35,.25))<1e-10);
+    check(std::abs(fast-limit(dense,s,.40,.70,.35,.25))<1e-8);
+  }
+  check(limit(left,.70,.40,.70,.35,.25)<.20);
   std::cout<<"PASS straight, mirrored corners, density, duplicates, hairpin, S turn and braking onset\n";
 }

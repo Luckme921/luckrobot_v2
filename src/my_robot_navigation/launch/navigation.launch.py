@@ -16,8 +16,11 @@ class MotionLimitedYaml(RewrittenYaml):
 
     def perform(self, context):
         speed = float(LaunchConfiguration('motion_speed_limit').perform(context))
-        if not math.isfinite(speed) or not 0.0 < speed <= 0.30:
-            raise ValueError('motion_speed_limit must be in (0, 0.30] m/s')
+        if not math.isfinite(speed) or not 0.0 < speed <= 0.40:
+            raise ValueError('motion_speed_limit must be in (0, 0.40] m/s')
+        yaw = float(LaunchConfiguration('motion_angular_limit', default='0.35').perform(context))
+        if not math.isfinite(yaw) or not 0.0 < yaw <= 0.70:
+            raise ValueError('motion_angular_limit must be in (0, 0.70] rad/s')
         source = super().perform(context)
         with open(source, encoding='utf-8') as stream:
             data = yaml.safe_load(stream)
@@ -25,8 +28,24 @@ class MotionLimitedYaml(RewrittenYaml):
         for config in controller.values():
             if isinstance(config, dict) and 'desired_linear_vel' in config:
                 config['desired_linear_vel'] = speed
+                if 'max_angular_vel' in config:
+                    config['max_angular_vel'] = yaw
+                    config['rotate_angular_vel'] = yaw * (0.25 / 0.35)
+                    # configure() requires breakaway >= normal spin. Do not
+                    # boost it beyond that to the full tracking yaw maximum.
+                    config['rotation_breakaway_angular_vel'] = min(
+                        yaw, max(0.35, config['rotate_angular_vel']))
+                if speed > 0.30:
+                    # More approach distance, not an invented stronger brake.
+                    if 'approach_dist' in config:
+                        config['approach_dist'] = max(config['approach_dist'], 0.75)
+                    if 'approach_velocity_scaling_dist' in config:
+                        config['approach_velocity_scaling_dist'] = max(
+                            config['approach_velocity_scaling_dist'], 0.75)
         smoother = data['velocity_smoother']['ros__parameters']
         smoother['max_velocity'][0] = speed
+        smoother['max_velocity'][2] = yaw
+        smoother['min_velocity'][2] = -yaw
         smoother['min_velocity'][0] = max(smoother['min_velocity'][0], -speed)
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as stream:
             yaml.safe_dump(data, stream)
@@ -145,6 +164,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('motion_angular_limit', default_value='0.35',
+                              description='Shared tracking yaw cap; fast candidate upper bound 0.70'),
         DeclareLaunchArgument('motion_speed_limit', default_value='0.30',
                               description='Shared forward limit for controller, smoother and guard'),
         declare_use_slam_cmd,

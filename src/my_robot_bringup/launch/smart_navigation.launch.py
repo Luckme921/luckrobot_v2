@@ -208,6 +208,7 @@ def generate_launch_description():
             'log_level': 'info',
             'navigation_profile': navigation_profile,
             'motion_speed_limit': motion_speed_limit,
+            'motion_angular_limit': LaunchConfiguration('motion_angular_limit'),
         }.items(),
     )
 
@@ -240,6 +241,8 @@ def generate_launch_description():
         name='motion_freshness_guard', output='screen',
         parameters=[{'use_sim_time': use_sim_time_param,
                      'max_linear_velocity': ParameterValue(motion_speed_limit, value_type=float),
+                     'max_angular_velocity': ParameterValue(
+                         LaunchConfiguration('motion_angular_limit'), value_type=float),
                      'input_topic': ParameterValue(base_cmd_vel_topic, value_type=str)}],
     )
 
@@ -258,6 +261,7 @@ def generate_launch_description():
         collision_arg,
         use_sim_time_arg,
         DeclareLaunchArgument('motor_accel_time', default_value='50'),
+        DeclareLaunchArgument('motion_angular_limit', default_value='0.35'),
         DeclareLaunchArgument('motion_speed_limit', default_value='0.30',
                               description='Final curvature-preserving forward speed cap; first validation uses 0.15'),
         start_at_dock_arg,

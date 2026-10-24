@@ -60,6 +60,7 @@ def generate_launch_description():
             'use_collision_monitor': use_collision_monitor,
             'use_sim_time': use_sim_time,
             'motion_speed_limit': LaunchConfiguration('motion_speed_limit'),
+            'motion_angular_limit': LaunchConfiguration('motion_angular_limit'),
             'motor_accel_time': LaunchConfiguration('motor_accel_time'),
             'start_at_dock': start_at_dock,
             'navigation_profile': navigation_profile,
@@ -130,6 +131,7 @@ def generate_launch_description():
             description='实体机器人必须为 false',
         ),
         DeclareLaunchArgument('motor_accel_time', default_value='50'),
+        DeclareLaunchArgument('motion_angular_limit', default_value='0.35'),
         DeclareLaunchArgument('motion_speed_limit', default_value='0.30',
                               description='最终速度门控上限；首次验证用 0.15 m/s'),
         DeclareLaunchArgument(
