@@ -7,6 +7,10 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+
+install(PROGRAMS scripts/motion_freshness_guard.py
+  DESTINATION lib/${PROJECT_NAME} RENAME motion_freshness_guard)
+install(FILES scripts/motion_freshness_core.py DESTINATION lib/${PROJECT_NAME})
 # uncomment the following section in order to fill in
 # further dependencies manually.
 # find_package(<dependency> REQUIRED)

@@ -59,6 +59,8 @@ def generate_launch_description():
             'use_rviz2': use_rviz,
             'use_collision_monitor': use_collision_monitor,
             'use_sim_time': use_sim_time,
+            'motion_speed_limit': LaunchConfiguration('motion_speed_limit'),
+            'motor_accel_time': LaunchConfiguration('motor_accel_time'),
             'start_at_dock': start_at_dock,
             'navigation_profile': navigation_profile,
             'enable_stereo_ir': enable_stereo_ir,
@@ -127,6 +129,9 @@ def generate_launch_description():
             'use_sim_time', default_value='false',
             description='实体机器人必须为 false',
         ),
+        DeclareLaunchArgument('motor_accel_time', default_value='50'),
+        DeclareLaunchArgument('motion_speed_limit', default_value='0.30',
+                              description='最终速度门控上限；首次验证用 0.15 m/s'),
         DeclareLaunchArgument(
             'start_at_dock', default_value='true',
             description='加载 posegraph 时是否位于首节点/充电桩',

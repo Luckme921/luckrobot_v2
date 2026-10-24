@@ -16,15 +16,10 @@
         <RateController hz="0.5">
           <RecoveryNode number_of_retries="1" name="ComputePathToPose">
             <ComputePathToPose goal="{goal}" path="{path}" planner_id="LuckGrid"/>
-            <!-- If global planning fails, camera-only cells left outside the
-                 current field of view may be stale. Clear the global dynamic
-                 layers once, then allow fresh scans to re-mark any obstacle
-                 still present before the one bounded planning retry. Static
-                 map obstacles are restored by StaticLayer. The local costmap
-                 and Collision Monitor remain untouched. -->
+            <!-- An out-of-view camera-only obstacle cannot be disproved by
+                 lidar. Never erase all remembered high obstacles just because
+                 planning failed. Wait for actual observation updates instead. -->
             <Sequence name="RefreshGlobalObstaclesOnNoPath">
-              <ClearEntireCostmap name="ClearGlobalCostmap-OnNoPath"
-                                  service_name="global_costmap/clear_entirely_global_costmap"/>
               <Wait wait_duration="2"/>
             </Sequence>
           </RecoveryNode>

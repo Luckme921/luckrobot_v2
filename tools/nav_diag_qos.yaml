@@ -1,0 +1,15 @@
+# Observers must not impose reliable backpressure on control/TF publishers.
+# Keep transient-local map/static-TF histories, but use best effort delivery.
+/tf: {history: keep_last, depth: 100, reliability: best_effort, durability: volatile}
+/tf_static: {history: keep_last, depth: 100, reliability: best_effort, durability: transient_local}
+/map: {history: keep_last, depth: 1, reliability: best_effort, durability: transient_local}
+/local_costmap/costmap: {history: keep_last, depth: 1, reliability: best_effort, durability: transient_local}
+/global_costmap/costmap: {history: keep_last, depth: 1, reliability: best_effort, durability: transient_local}
+/wheel/odom: {history: keep_last, depth: 5, reliability: best_effort, durability: volatile}
+/wheel_feedback: {history: keep_last, depth: 5, reliability: best_effort, durability: volatile}
+/cmd_vel_nav: {history: keep_last, depth: 5, reliability: best_effort, durability: volatile}
+/cmd_vel: {history: keep_last, depth: 5, reliability: best_effort, durability: volatile}
+/cmd_vel_safe: {history: keep_last, depth: 5, reliability: best_effort, durability: volatile}
+/cmd_vel_drive: {history: keep_last, depth: 5, reliability: best_effort, durability: volatile}
+/scan_camera: {history: keep_last, depth: 5, reliability: best_effort, durability: volatile}
+/rosout: {history: keep_last, depth: 100, reliability: best_effort, durability: volatile}

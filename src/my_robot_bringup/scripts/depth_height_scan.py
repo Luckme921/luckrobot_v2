@@ -92,7 +92,7 @@ class DepthHeightScan(Node):
         )
         sensor_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
-            depth=5,
+            depth=1,  # latest depth frame; avoid processing stale image backlog
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )

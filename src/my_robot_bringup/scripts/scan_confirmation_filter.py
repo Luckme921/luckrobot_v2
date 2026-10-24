@@ -35,6 +35,11 @@ class ScanConfirmationFilter(Node):
         self.declare_parameter('min_cluster_beams', 7)
         self.declare_parameter('cluster_range_tolerance', 0.08)
         self.declare_parameter('stats_period', 5.0)
+        self.declare_parameter('max_scan_age', 0.35)
+        self.declare_parameter('max_tf_skew', 0.20)
+        self.max_scan_age = float(self.get_parameter('max_scan_age').value)
+        self.max_tf_skew = float(self.get_parameter('max_tf_skew').value)
+        self.last_scan_ns = -1
 
         self.fixed_frame = str(self.get_parameter('fixed_frame').value)
         self.confirmation_frames = max(
@@ -59,7 +64,7 @@ class ScanConfirmationFilter(Node):
 
         input_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
-            depth=5,
+            depth=1,
             reliability=ReliabilityPolicy.BEST_EFFORT,
             durability=DurabilityPolicy.VOLATILE,
         )
@@ -147,16 +152,21 @@ class ScanConfirmationFilter(Node):
             # to hundreds of milliseconds. Waiting cannot create a past TF
             # when EKF is under load, and publishing an empty planning scan
             # made the complete camera layer disappear. Use the latest
-            # available transform as a bounded fallback; at the robot's
-            # <=0.26 m/s navigation speed the spatial confirmation grid and
-            # 4 cm neighbor tolerance absorb the small pose-age error.
+            # available transform only within a bounded skew. This reduces,
+            # but does not eliminate, motion-compensation error; keep the
+            # original measurement stamp and never claim a stale TF is fresh.
             try:
                 transform = self.tf_buffer.lookup_transform(
                     self.fixed_frame,
                     source_frame,
                     Time(),
-                    timeout=Duration(seconds=0.02),
+                    timeout=Duration(seconds=0.0),
                 )
+                source_ns = stamp.sec * 1_000_000_000 + stamp.nanosec
+                tf_ns = (transform.header.stamp.sec * 1_000_000_000 +
+                         transform.header.stamp.nanosec)
+                if abs(source_ns - tf_ns) > int(self.max_tf_skew * 1e9):
+                    raise TransformException('Latest TF exceeds bounded scan/TF skew')
                 self.frames_latest_tf += 1
                 if self.frames_latest_tf <= 3:
                     self.get_logger().warning(
@@ -242,6 +252,16 @@ class ScanConfirmationFilter(Node):
 
     def on_scan(self, message):
         self.frames_received += 1
+        now_ns = self.get_clock().now().nanoseconds
+        scan_ns = message.header.stamp.sec * 1_000_000_000 + message.header.stamp.nanosec
+        if (scan_ns <= self.last_scan_ns or now_ns - scan_ns > self.max_scan_age * 1e9
+                or scan_ns - now_ns > 0.20 * 1e9):
+            self.history.clear()
+            # Do not turn unavailable evidence into an empty/free observation.
+            if scan_ns < self.last_scan_ns - 1_000_000_000:
+                self.last_scan_ns = -1  # reinitialize after a clock reset
+            return
+        self.last_scan_ns = scan_ns
         output = self.empty_copy(message)
         ranges = np.asarray(message.ranges, dtype=np.float64)
         valid = (
@@ -265,21 +285,13 @@ class ScanConfirmationFilter(Node):
             message.header.frame_id, message.header.stamp
         )
         if transform is None:
-            # Costmaps get an empty scan until world-frame confirmation is
-            # available. Collision Monitor still receives the independent
-            # immediate /scan_camera_safety stream.
-            self.publisher.publish(output)
-            self.frames_published += 1
+            self.history.clear()
             return
 
-        if used_latest_tf:
-            # Downstream RViz/costmap TF filters must query the same transform
-            # epoch used for spatial confirmation. Keeping the camera's
-            # future stamp here would make them repeat the same extrapolation
-            # failure even though this node already recovered successfully.
-            output.header.stamp = transform.header.stamp
+        # Keep the measurement timestamp. Points are still in the sensor/base
+        # frame at capture time; a fallback used only for confirmation must not
+        # relabel current observations with a frozen odometry timestamp.
 
-        now_ns = self.get_clock().now().nanoseconds
         cutoff_ns = now_ns - int(self.history_duration * 1.0e9)
         while self.history and self.history[0][0] < cutoff_ns:
             self.history.popleft()
@@ -298,7 +310,7 @@ class ScanConfirmationFilter(Node):
                         break
 
         current_cells = set(cells)
-        self.history.append((now_ns, current_cells))
+        self.history.append((scan_ns, current_cells))
 
         confirmed_mask = np.zeros(ranges.size, dtype=bool)
         confirmed_mask[valid_indices[confirmed_valid]] = True

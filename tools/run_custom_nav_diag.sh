@@ -5,6 +5,7 @@
 # Use 0 to record until Ctrl-C.  That mode is preferred for an intermittent
 # stall because the bag cannot expire immediately before the failure.
 
+source "$HOME/ros2_ws/tools/robot_env.sh"
 set -u
 
 duration="${1:-90}"
@@ -15,6 +16,7 @@ fi
 stamp="$(date +%Y%m%d_%H%M%S)"
 diag="$HOME/custom_nav_${stamp}"
 bag_pid=""
+stats_pid=""
 finished=0
 
 ros_timeout()
@@ -30,6 +32,10 @@ finish_recording()
   # flushes and tar is being written, otherwise repeated Ctrl-C can leave only
   # *_bag.log without the requested diagnostic archive.
   trap '' INT TERM
+  if [[ -n "$stats_pid" ]] && kill -0 "$stats_pid" 2>/dev/null; then
+    kill -TERM "$stats_pid" 2>/dev/null || true
+    wait "$stats_pid" || true
+  fi
   if [[ -n "$bag_pid" ]] && kill -0 "$bag_pid" 2>/dev/null; then
     echo "收到停止请求；正在让 rosbag 落盘并打包，请不要重复按 Ctrl-C……"
     kill -INT "$bag_pid" 2>/dev/null || true
@@ -43,14 +49,18 @@ finish_recording()
         ros_timeout 5s ros2 run tf2_ros tf2_echo map base_footprint || true
         echo "===== date after ====="
         date --iso-8601=ns
+        echo "===== UDP counters after ====="
+        grep '^Udp:' /proc/net/snmp
       } >> "${diag}_state.log" 2>&1
-      tar -czf "${diag}.tar.gz" \
+      # Compression is background diagnostic work, not a real-time competitor.
+      nice -n 15 tar -czf "${diag}.tar.gz" \
         -C "$HOME" \
         "$(basename "$diag")" \
         "$(basename "${diag}_state.log")" \
         "$(basename "${diag}_controller_params.yaml")" \
         "$(basename "${diag}_planner_params.yaml")" \
         "$(basename "${diag}_slam_params.yaml")" \
+        "$(basename "${diag}_performance.log")" \
         "$(basename "${diag}_bag.log")"
       echo "诊断包：${diag}.tar.gz"
     else
@@ -79,6 +89,7 @@ required_nodes=(
   /velocity_smoother
   /bt_navigator
   /collision_monitor
+  /motion_freshness_guard
 )
 for node in "${required_nodes[@]}"; do
   if ! grep -Fxq "$node" <<< "$node_list"; then
@@ -157,6 +168,20 @@ echo "[3/5] 保存算法、行为树和起始位姿（单项最多 5 秒）…�
 {
   echo "===== date ====="
   date --iso-8601=ns
+  echo "===== transport ====="
+  echo "===== UDP counters before ====="
+  grep '^Udp:' /proc/net/snmp
+  sysctl net.core.rmem_max net.core.wmem_max
+  echo "===== process CPU snapshot ====="
+  ps -eo pid,pcpu,pmem,comm --sort=-pcpu | head -15
+  printf '%s\n' "RMW_IMPLEMENTATION=${RMW_IMPLEMENTATION}" \
+    "FASTRTPS_DEFAULT_PROFILES_FILE=${FASTRTPS_DEFAULT_PROFILES_FILE}" \
+    "RMW_FASTRTPS_PUBLICATION_MODE=${RMW_FASTRTPS_PUBLICATION_MODE}"
+  echo "===== final motion guard parameters ====="
+  ros_timeout 5s ros2 param dump /motion_freshness_guard 2>&1 || true
+  echo "===== chassis acceleration and velocity smoother parameters ====="
+  ros_timeout 5s ros2 param dump /chassis_driver_node 2>&1 || true
+  ros_timeout 5s ros2 param dump /velocity_smoother 2>&1 || true
   echo "===== lifecycle ====="
   echo "controller: $controller_state"
   echo "planner: $planner_state"
@@ -176,7 +201,7 @@ echo "[3/5] 保存算法、行为树和起始位姿（单项最多 5 秒）…�
   echo "===== default BT ====="
   ros_timeout 5s ros2 param get /bt_navigator default_nav_to_pose_bt_xml 2>&1 || true
   echo "===== velocity chain endpoints ====="
-  for topic in /cmd_vel_nav /cmd_vel /cmd_vel_safe /wheel_feedback /wheel/odom /imu/data; do
+  for topic in /cmd_vel_nav /cmd_vel /cmd_vel_safe /cmd_vel_drive /wheel_feedback /wheel/odom /imu/data; do
     echo "--- $topic ---"
     ros_timeout 5s ros2 topic info "$topic" -v 2>&1 || true
   done
@@ -185,13 +210,19 @@ echo "[3/5] 保存算法、行为树和起始位姿（单项最多 5 秒）…�
 } > "${diag}_state.log" 2>&1
 
 echo "[4/5] 启动 rosbag……"
+echo "Performance sampling not started yet" > "${diag}_performance.log"
 ros2 bag record \
+  --qos-profile-overrides-path "$HOME/ros2_ws/tools/nav_diag_qos.yaml" \
   --include-hidden-topics \
   -o "$diag" \
   /cmd_vel_nav \
   /cmd_vel \
   /cmd_vel_safe \
+  /cmd_vel_drive \
+  /motion_freshness_guard/status \
   /wheel_feedback \
+  /wheel_response_debug \
+  /motor_status_debug \
   /wheel/odom \
   /odometry/filtered \
   /imu/data \
@@ -228,6 +259,14 @@ if ! kill -0 "$bag_pid" 2>/dev/null; then
   exit 5
 fi
 
+if command -v tegrastats >/dev/null 2>&1; then
+  # One sample per second; no root, GPU test load, or hardware control.
+  tegrastats --interval 1000 > "${diag}_performance.log" 2>&1 &
+  stats_pid=$!
+else
+  echo "tegrastats unavailable; no CPU/GPU/thermal samples" > "${diag}_performance.log"
+fi
+
 echo "[5/5] rosbag 已启动。"
 echo "记录已开始。一次只复现一个场景，不要在同一包里混合自动探索。"
 echo "若测试召回：必须先启动本脚本，再发送召回目标，卡住后再 Ctrl-C 打包。"
@@ -236,6 +275,11 @@ if (( duration == 0 )); then
   echo "不要启动自动探索，不要同时修改参数。现在会一直记录；故障出现后按 Ctrl+C 打包。"
   while true; do
     sleep 15
+    if ! kill -0 "$bag_pid" 2>/dev/null; then
+      echo "错误：rosbag 意外退出，停止误报并打包已有数据；请检查 ${diag}_bag.log。"
+      finish_recording
+      exit 5
+    fi
     echo "仍在记录；故障出现后按 Ctrl+C……"
   done
 else
@@ -248,6 +292,11 @@ else
     fi
     sleep "$step"
     remaining=$((remaining - step))
+    if ! kill -0 "$bag_pid" 2>/dev/null; then
+      echo "错误：rosbag 意外退出，停止误报并打包已有数据；请检查 ${diag}_bag.log。"
+      finish_recording
+      exit 5
+    fi
     if (( remaining > 0 )); then
       echo "仍在记录，剩余约 ${remaining} 秒……"
     fi

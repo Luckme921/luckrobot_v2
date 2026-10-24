@@ -1,0 +1,7 @@
+<library path="luckrobot_nav2_plugins">
+  <class name="luckrobot_nav2_plugins::PersistentCameraLayer"
+         type="luckrobot_nav2_plugins::PersistentCameraLayer"
+         base_class_type="nav2_costmap_2d::Layer">
+    <description>Retain global camera obstacle cells across SLAM map expansion.</description>
+  </class>
+</library>

@@ -203,6 +203,8 @@ def generate_launch_description():
         package='chassis_driver',
         executable='chassis_node',
         name='chassis_driver_node',
+        parameters=[{'motor_accel_time': ParameterValue(
+            LaunchConfiguration('motor_accel_time'), value_type=int)}],
         remappings=[('cmd_vel', cmd_vel_topic)],
         output='screen'
     )
@@ -368,6 +370,7 @@ def generate_launch_description():
         depth_min_height_arg,
         depth_max_height_arg,
         cmd_vel_topic_arg,
+        DeclareLaunchArgument('motor_accel_time', default_value='50'),
         robot_description_launch,
         rplidar_launch,
         camera_launch,

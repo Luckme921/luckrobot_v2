@@ -1,4 +1,7 @@
 import os
+import math
+import tempfile
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
@@ -6,6 +9,28 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch.conditions import IfCondition
 from nav2_common.launch import RewrittenYaml
+
+
+class MotionLimitedYaml(RewrittenYaml):
+    """Keep controller prediction and downstream speed authority consistent."""
+
+    def perform(self, context):
+        speed = float(LaunchConfiguration('motion_speed_limit').perform(context))
+        if not math.isfinite(speed) or not 0.0 < speed <= 0.30:
+            raise ValueError('motion_speed_limit must be in (0, 0.30] m/s')
+        source = super().perform(context)
+        with open(source, encoding='utf-8') as stream:
+            data = yaml.safe_load(stream)
+        controller = data['controller_server']['ros__parameters']
+        for config in controller.values():
+            if isinstance(config, dict) and 'desired_linear_vel' in config:
+                config['desired_linear_vel'] = speed
+        smoother = data['velocity_smoother']['ros__parameters']
+        smoother['max_velocity'][0] = speed
+        smoother['min_velocity'][0] = max(smoother['min_velocity'][0], -speed)
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as stream:
+            yaml.safe_dump(data, stream)
+            return stream.name
 
 def generate_launch_description():
     # 获取包路径
@@ -45,7 +70,7 @@ def generate_launch_description():
     # two YAML placeholders to installed absolute paths so RViz/manual goals
     # always select general_goal_checker; automatic exploration supplies its
     # own BT and explicitly selects explore_goal_checker.
-    configured_params = RewrittenYaml(
+    configured_params = MotionLimitedYaml(
         source_file=params_file,
         root_key='',
         param_rewrites={
@@ -120,6 +145,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('motion_speed_limit', default_value='0.30',
+                              description='Shared forward limit for controller, smoother and guard'),
         declare_use_slam_cmd,
         declare_map_yaml_cmd,
         declare_params_file_cmd,

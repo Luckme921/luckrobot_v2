@@ -4,12 +4,26 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, TimerAction, SetEnvironmentVariable, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+
+def check_transport_buffers(context):
+    # The temporary sysctl cap resets on reboot. Fail before any hardware is
+    # launched, rather than silently returning to fragmented depth-image loss.
+    for setting in ('rmem_max', 'wmem_max'):
+        with open('/proc/sys/net/core/' + setting) as stream:
+            value = int(stream.read().strip())
+        if value < 4194304:
+            raise RuntimeError(
+                'UDP buffer cap too small (%s=%d). Before navigation run: '
+                'sudo sysctl -w net.core.rmem_max=4194304 net.core.wmem_max=4194304'
+                % (setting, value))
+    return []
 
 
 def generate_launch_description():
@@ -22,6 +36,7 @@ def generate_launch_description():
     use_rviz = LaunchConfiguration('use_rviz2')
     use_collision_monitor = LaunchConfiguration('use_collision_monitor')
     use_sim_time = LaunchConfiguration('use_sim_time')
+    motion_speed_limit = LaunchConfiguration('motion_speed_limit')
     start_at_dock = LaunchConfiguration('start_at_dock')
     navigation_profile = LaunchConfiguration('navigation_profile')
     enable_stereo_ir = LaunchConfiguration('enable_stereo_ir')
@@ -123,7 +138,8 @@ def generate_launch_description():
         ),
         launch_arguments={
             'use_rviz2': use_rviz,
-            'cmd_vel_topic': base_cmd_vel_topic,
+            'cmd_vel_topic': '/cmd_vel_drive',
+            'motor_accel_time': LaunchConfiguration('motor_accel_time'),
             'enable_stereo_ir': enable_stereo_ir,
             'vslam_camera_profile': vslam_camera_profile,
             'depth_scan_height': depth_scan_height,
@@ -191,6 +207,7 @@ def generate_launch_description():
             # 显式覆盖，防止 none 透传给 Nav2 并导致所有核心节点启动失败。
             'log_level': 'info',
             'navigation_profile': navigation_profile,
+            'motion_speed_limit': motion_speed_limit,
         }.items(),
     )
 
@@ -218,15 +235,31 @@ def generate_launch_description():
         }],
     )
 
+    motion_guard = Node(
+        package='my_robot_bringup', executable='motion_freshness_guard',
+        name='motion_freshness_guard', output='screen',
+        parameters=[{'use_sim_time': use_sim_time_param,
+                     'max_linear_velocity': ParameterValue(motion_speed_limit, value_type=float),
+                     'input_topic': ParameterValue(base_cmd_vel_topic, value_type=str)}],
+    )
+
     # 给 TF、雷达与 EKF 留出初始化窗口；节点本身仍会等待生命周期依赖就绪。
     delayed_navigation = TimerAction(period=5.0, actions=[navigation])
 
     return LaunchDescription([
+        OpaqueFunction(function=check_transport_buffers),
+        SetEnvironmentVariable('RMW_IMPLEMENTATION', 'rmw_fastrtps_cpp'),
+        SetEnvironmentVariable('FASTRTPS_DEFAULT_PROFILES_FILE',
+                               os.path.join(bringup_dir, 'config', 'fastdds_udp.xml')),
+        SetEnvironmentVariable('RMW_FASTRTPS_PUBLICATION_MODE', 'ASYNCHRONOUS'),
         mode_arg,
         posegraph_arg,
         use_rviz_arg,
         collision_arg,
         use_sim_time_arg,
+        DeclareLaunchArgument('motor_accel_time', default_value='50'),
+        DeclareLaunchArgument('motion_speed_limit', default_value='0.30',
+                              description='Final curvature-preserving forward speed cap; first validation uses 0.15'),
         start_at_dock_arg,
         navigation_profile_arg,
         enable_stereo_ir_arg,
@@ -241,5 +274,6 @@ def generate_launch_description():
         lifelong_slam,
         collision_monitor,
         collision_lifecycle,
+        motion_guard,
         delayed_navigation,
     ])

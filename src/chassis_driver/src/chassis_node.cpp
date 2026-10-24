@@ -142,33 +142,10 @@ void clear_serial_buffer() {
  * @brief 全局信号捕获。拦截 Ctrl+C 等强杀指令，强制下发 0xFF 硬件急刹保证人身安全。
  */
 void signal_handler(int signum) {
-    if (g_signal_handled.load()) return;
-    g_signal_handled.store(true);
-    sigaction(SIGINT, &g_old_sigint, nullptr);
-
-    if (g_serial_fd >= 0) {
-        uint8_t brake_frame[FRAME_LENGTH] = {0};
-        brake_frame[1] = FUNC_CODE;
-        brake_frame[7] = BRAKE_BYTE; // 核心：下发 0xFF 抱死指令
-        
-        brake_frame[0] = LEFT_WHEEL_ID;
-        brake_frame[9] = crc8_maxim(brake_frame, 9);
-        write(g_serial_fd, brake_frame, FRAME_LENGTH);
-        tcdrain(g_serial_fd);
-        usleep(RS485_DELAY_US);
-        
-        brake_frame[0] = RIGHT_WHEEL_ID;
-        brake_frame[9] = crc8_maxim(brake_frame, 9);
-        write(g_serial_fd, brake_frame, FRAME_LENGTH);
-        tcdrain(g_serial_fd);
-    }
-    
+    (void)signum;
+    // Defer shutdown to executor: closing here races FD_SET in motor I/O.
     g_node_running.store(false);
-    if (g_serial_fd >= 0) {
-        close(g_serial_fd);
-        g_serial_fd = -1;
-    }
-    rclcpp::shutdown();
+    return;
 }
 
 // ==================== 核心控制节点 ====================
@@ -183,18 +160,27 @@ public:
                     odom_x_(0.0), odom_y_(0.0), odom_th_(0.0), odom_initialized_(false) // 初始化里程计变量
     {
         g_node_running.store(true);
+        motor_accel_time_ = declare_parameter<int>("motor_accel_time", 50);
+        if (motor_accel_time_ < 1 || motor_accel_time_ > 255) {
+            throw std::invalid_argument("motor_accel_time must be 1..255");
+        }
+        motor_status_pub_ = create_publisher<std_msgs::msg::Float64MultiArray>(
+            "motor_status_debug", rclcpp::QoS(5).best_effort());
 
         cmd_vel_sub_ = this->create_subscription<geometry_msgs::msg::Twist>(
-            "cmd_vel", 10, std::bind(&ChassisNode::cmd_vel_callback, this, std::placeholders::_1));
+            "cmd_vel", 1, std::bind(&ChassisNode::cmd_vel_callback, this, std::placeholders::_1));
 
         feedback_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>("wheel_feedback", 10);
+        response_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+            "wheel_response_debug", rclcpp::QoS(5).best_effort());
 
         // ==================== [新增]: 注册里程计发布器 ====================
-        // 🌟 工业级 QoS 调优：保持与 EKF 兼容的 Reliable，但将缓冲队列扩大至 50
-        // 彻底解决 100Hz 丢包造成的积分漏算现象！
-        rclcpp::QoS custom_qos(50);
+        // Navigation needs current state, not a replay of 50 old samples.
+        // Integration is done locally; reducing DDS history does not lose ticks.
+        rclcpp::QoS custom_qos(5);
         custom_qos.reliable();
-        custom_qos.keep_last(50);
+        custom_qos.keep_last(5);
+        custom_qos.lifespan(rclcpp::Duration::from_seconds(0.20));
         odom_pub_ = this->create_publisher<nav_msgs::msg::Odometry>("/wheel/odom", custom_qos);
         // ==================================================================
 
@@ -210,7 +196,7 @@ public:
             "底盘平滑器: real-dt | linear decel=%.2f m/s^2 | angular decel=%.2f rad/s^2",
             MAX_DECEL_X, MAX_DECEL_Z);
 
-        last_cmd_vel_time_ = this->now();
+        last_cmd_vel_time_ = std::chrono::steady_clock::now();
         last_odom_time_ = this->now(); // 记录初次里程计时间
         last_control_time_ = std::chrono::steady_clock::now();
         control_timer_ = this->create_wall_timer(
@@ -293,9 +279,10 @@ private:
      */
     void cmd_vel_callback(const geometry_msgs::msg::Twist::SharedPtr msg) {
         std::lock_guard<std::mutex> lock(vel_mutex_);
-        target_linear_x_ = msg->linear.x;
-        target_angular_z_ = msg->angular.z;
-        last_cmd_vel_time_ = this->now(); // 喂狗：重置看门狗定时器
+        const bool valid = std::isfinite(msg->linear.x) && std::isfinite(msg->angular.z);
+        target_linear_x_ = valid ? msg->linear.x : 0.0;
+        target_angular_z_ = valid ? msg->angular.z : 0.0;
+        last_cmd_vel_time_ = std::chrono::steady_clock::now();
         watchdog_tripped_ = false;
     }
 
@@ -360,7 +347,7 @@ private:
         frame[1] = FUNC_CODE;
         // 【硬件微插值】: 0x32(十进制50) = 5ms/RPM. 
         // 恰好填补 100Hz 软件平滑器产生的 10ms 阶梯缝隙，杜绝电机高频嗡嗡声。
-        frame[6] = 0x32;  
+        frame[6] = static_cast<uint8_t>(motor_accel_time_);
         // 软件接管宏观加减速，彻底弃用底层 0xFF 硬件抱死（防卡死 Bug）
         frame[7] = RUN_BYTE; 
         
@@ -372,6 +359,7 @@ private:
 
         // 带丢包/错包自动重发机制
         for (int retry = 0; retry < RS485_CMD_RETRY; ++retry) {
+            if (!g_node_running.load()) return false;
             clear_serial_buffer(); // 发送前严格清空缓冲区
             if (write(g_serial_fd, frame, FRAME_LENGTH) != FRAME_LENGTH) continue;
             tcdrain(g_serial_fd); // 阻塞直到串行缓冲中数据物理发出
@@ -387,6 +375,13 @@ private:
             if (select(g_serial_fd + 1, &read_fds, nullptr, nullptr, &timeout) > 0) {
                 if (read(g_serial_fd, resp, FRAME_LENGTH) == FRAME_LENGTH) {
                     if (resp[0] == id && resp[9] == crc8_maxim(resp, 9)) {
+                        std_msgs::msg::Float64MultiArray status;
+                        const int16_t current = static_cast<int16_t>(
+                            (static_cast<uint16_t>(resp[2]) << 8) | resp[3]);
+                        status.data = {static_cast<double>(id), static_cast<double>(resp[1]),
+                            current * 8.0 / 32767.0, static_cast<double>(resp[8]),
+                            static_cast<double>(motor_accel_time_)};
+                        motor_status_pub_->publish(status);
                         feedback_rpm = (static_cast<int16_t>(resp[4]) << 8) | resp[5];
                         feedback_pos = (static_cast<uint16_t>(resp[6]) << 8) | resp[7];
                         usleep(RS485_DELAY_US); // 让出半双工总线时间片，防碰撞
@@ -536,7 +531,11 @@ private:
      * @brief ROS 2 控制闭环守护线程（100Hz 期望调度，真实 dt 积分）
      */
     void control_loop() {
-        if (!g_node_running.load() || !rclcpp::ok()) return;
+        if (!g_node_running.load()) {
+            rclcpp::shutdown();
+            return;
+        }
+        if (!rclcpp::ok()) return;
 
         // 通信链路健康自愈维护
         if (g_serial_fd < 0) {
@@ -551,7 +550,8 @@ private:
             }
         }
 
-        double time_since_cmd = (this->now() - last_cmd_vel_time_).seconds();
+        double time_since_cmd = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - last_cmd_vel_time_).count();
         bool is_timeout = (time_since_cmd > CMD_VEL_TIMEOUT);
 
         double target_x = 0.0;
@@ -610,8 +610,19 @@ private:
         uint16_t left_raw_pos = 0, right_raw_pos = 0;
 
         // 严格遵循半双工令牌环：顺序读取，避免总线碰撞
+        const auto bus_start = std::chrono::steady_clock::now();
         bool left_ok = send_and_read_motor(LEFT_WHEEL_ID, left_rpm, fb_left_rpm, left_raw_pos);
         bool right_ok = send_and_read_motor(RIGHT_WHEEL_ID, right_rpm, fb_right_rpm, right_raw_pos);
+        // Raw protocol RPM signs, not body-normalized. Feedback is valid only
+        // when the corresponding ok flag is 1. Observability only; no control change.
+        std_msgs::msg::Float64MultiArray response;
+        response.data = {time_since_cmd, target_x, target_z, cur_lin_x_, cur_ang_z_,
+            static_cast<double>(left_rpm), static_cast<double>(right_rpm),
+            static_cast<double>(fb_left_rpm), static_cast<double>(fb_right_rpm),
+            left_ok ? 1.0 : 0.0, right_ok ? 1.0 : 0.0,
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - bus_start).count(),
+            is_timeout ? 1.0 : 0.0};
+        response_pub_->publish(response);
 
         if (!left_ok || !right_ok) {
             comm_failures_++;
@@ -654,13 +665,16 @@ private:
 
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_sub_;
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr feedback_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr response_pub_;
+    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr motor_status_pub_;
+    int motor_accel_time_ = 50;
     // [新增] 里程计发布器
     rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
     rclcpp::TimerBase::SharedPtr control_timer_;
 
     std::mutex vel_mutex_;
     double target_linear_x_, target_angular_z_;
-    rclcpp::Time last_cmd_vel_time_;
+    std::chrono::steady_clock::time_point last_cmd_vel_time_;
     std::chrono::steady_clock::time_point last_control_time_;
     bool watchdog_tripped_;
 

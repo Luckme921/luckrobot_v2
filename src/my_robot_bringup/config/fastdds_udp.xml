@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!-- Scoped navigation transport. Avoid residual SHM ports after recorder exit.
+     Do not overwrite the user's system-wide Fast DDS configuration. -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>luckrobot_udp</transport_id>
+      <type>UDPv4</type>
+      <!-- A 640x400 Y16 image is 512 KB before DDS framing. The default
+           208 KB socket buffer loses fragments even on localhost. -->
+      <sendBufferSize>4194304</sendBufferSize>
+      <receiveBufferSize>4194304</receiveBufferSize>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="luckrobot_udp_profile" is_default_profile="true">
+    <rtps>
+      <useBuiltinTransports>false</useBuiltinTransports>
+      <userTransports><transport_id>luckrobot_udp</transport_id></userTransports>
+    </rtps>
+  </participant>
+</profiles>

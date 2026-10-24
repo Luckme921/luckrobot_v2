@@ -1,0 +1,26 @@
+diff --git a/launch/rplidar_a2m12_launch.py b/launch/rplidar_a2m12_launch.py
+index da45f62..109af34 100644
+--- a/launch/rplidar_a2m12_launch.py
++++ b/launch/rplidar_a2m12_launch.py
+@@ -12,7 +12,7 @@ from launch_ros.actions import Node
+ 
+ def generate_launch_description():
+     channel_type =  LaunchConfiguration('channel_type', default='serial')
+-    serial_port = LaunchConfiguration('serial_port', default='/dev/ttyUSB0')
++    serial_port = LaunchConfiguration('serial_port', default='/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_4d851953e10a6c41a0e589766753218c-if00-port0')
+     serial_baudrate = LaunchConfiguration('serial_baudrate', default='256000')
+     frame_id = LaunchConfiguration('frame_id', default='laser')
+     inverted = LaunchConfiguration('inverted', default='false')
+diff --git a/launch/view_rplidar_a2m12_launch.py b/launch/view_rplidar_a2m12_launch.py
+index fb6e65a..ecad36c 100644
+--- a/launch/view_rplidar_a2m12_launch.py
++++ b/launch/view_rplidar_a2m12_launch.py
+@@ -12,7 +12,7 @@ from launch_ros.actions import Node
+ 
+ def generate_launch_description():
+     channel_type =  LaunchConfiguration('channel_type', default='serial')
+-    serial_port = LaunchConfiguration('serial_port', default='/dev/ttyUSB0')
++    serial_port = LaunchConfiguration('serial_port', default='/dev/serial/by-id/usb-Silicon_Labs_CP2102_USB_to_UART_Bridge_4d851953e10a6c41a0e589766753218c-if00-port0')
+     serial_baudrate = LaunchConfiguration('serial_baudrate', default='256000')
+     frame_id = LaunchConfiguration('frame_id', default='laser')
+     inverted = LaunchConfiguration('inverted', default='false')

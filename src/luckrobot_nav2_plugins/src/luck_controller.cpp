@@ -1,4 +1,6 @@
 #include "luckrobot_nav2_plugins/luck_controller.hpp"
+#include "luckrobot_nav2_plugins/motion_prediction.hpp"
+#include "luckrobot_nav2_plugins/corner_speed.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -31,7 +33,7 @@ namespace
 // parameter surface or diagnostic message layout.
 constexpr double kFollowPathResumeGap = 0.50;
 constexpr double kCornerUnwindAngularVelocity = 0.12;
-constexpr double kCornerUnwindTimeout = 2.0;
+constexpr double kCornerUnwindTimeout = 3.0;
 constexpr double kRadiansToDegrees = 57.29577951308232;
 
 }  // namespace
@@ -75,6 +77,7 @@ void LuckController::configure(
   declare_double("rotate_angular_vel", rotate_angular_vel_);
   declare_double("min_rotate_angular_vel", min_rotate_angular_vel_);
   declare_double("lookahead_dist", lookahead_dist_);
+  declare_bool("use_corner_speed_preview", use_corner_speed_preview_);
   declare_double("corner_lookahead_dist", corner_lookahead_dist_);
   declare_double("corner_lookahead_start_angle", corner_lookahead_start_angle_);
   declare_double("corner_lookahead_full_angle", corner_lookahead_full_angle_);
@@ -87,6 +90,10 @@ void LuckController::configure(
   declare_double("hard_rotate_angle", hard_rotate_angle_);
   declare_double("rotate_gain", rotate_gain_);
   declare_double("rotate_braking_decel", rotate_braking_decel_);
+  declare_double("motion_response_delay", motion_response_delay_);
+  declare_double("linear_braking_decel", linear_braking_decel_);
+  declare_double("steering_preview_time", steering_preview_time_);
+  declare_double("steering_correction_limit", steering_correction_limit_);
   declare_double("path_heading_gain", path_heading_gain_);
   declare_double("curvature_speed_gain", curvature_speed_gain_);
   declare_double("cost_speed_gain", cost_speed_gain_);
@@ -94,6 +101,8 @@ void LuckController::configure(
   declare_double("max_angular_accel", max_angular_accel_);
   declare_double("max_angular_decel", max_angular_decel_);
   declare_double("transform_tolerance", transform_tolerance_);
+  declare_double("max_pose_age", max_pose_age_);
+  declare_double("max_transform_age", max_transform_age_);
   declare_double("collision_horizon", collision_horizon_);
   declare_double("avoidance_angular_span", avoidance_angular_span_);
   declare_double("avoidance_min_linear_scale", avoidance_min_linear_scale_);
@@ -143,6 +152,7 @@ void LuckController::configure(
   node->get_parameter(plugin_name_ + ".rotate_angular_vel", rotate_angular_vel_);
   node->get_parameter(plugin_name_ + ".min_rotate_angular_vel", min_rotate_angular_vel_);
   node->get_parameter(plugin_name_ + ".lookahead_dist", lookahead_dist_);
+  node->get_parameter(plugin_name_ + ".use_corner_speed_preview", use_corner_speed_preview_);
   node->get_parameter(plugin_name_ + ".corner_lookahead_dist", corner_lookahead_dist_);
   node->get_parameter(
     plugin_name_ + ".corner_lookahead_start_angle", corner_lookahead_start_angle_);
@@ -158,6 +168,20 @@ void LuckController::configure(
   node->get_parameter(plugin_name_ + ".hard_rotate_angle", hard_rotate_angle_);
   node->get_parameter(plugin_name_ + ".rotate_gain", rotate_gain_);
   node->get_parameter(plugin_name_ + ".rotate_braking_decel", rotate_braking_decel_);
+  node->get_parameter(plugin_name_ + ".motion_response_delay", motion_response_delay_);
+  node->get_parameter(plugin_name_ + ".linear_braking_decel", linear_braking_decel_);
+  node->get_parameter(plugin_name_ + ".steering_preview_time", steering_preview_time_);
+  node->get_parameter(plugin_name_ + ".steering_correction_limit", steering_correction_limit_);
+  if (!std::isfinite(motion_response_delay_) || motion_response_delay_ < 0.0 ||
+    motion_response_delay_ > 0.5 || !std::isfinite(linear_braking_decel_) ||
+    linear_braking_decel_ < 0.1 || linear_braking_decel_ > 0.5 ||
+    !std::isfinite(steering_preview_time_) || steering_preview_time_ < 0.0 ||
+    steering_preview_time_ > 0.3 || !std::isfinite(steering_correction_limit_) ||
+    steering_correction_limit_ < 0.0 || steering_correction_limit_ > 0.15 ||
+    !std::isfinite(rotate_braking_decel_) || rotate_braking_decel_ <= 0.0)
+  {
+    throw std::runtime_error("LuckController prediction parameters outside safe bounds");
+  }
   node->get_parameter(plugin_name_ + ".path_heading_gain", path_heading_gain_);
   node->get_parameter(
     plugin_name_ + ".curvature_speed_gain", curvature_speed_gain_);
@@ -167,6 +191,13 @@ void LuckController::configure(
   node->get_parameter(plugin_name_ + ".max_angular_accel", max_angular_accel_);
   node->get_parameter(plugin_name_ + ".max_angular_decel", max_angular_decel_);
   node->get_parameter(plugin_name_ + ".transform_tolerance", transform_tolerance_);
+  node->get_parameter(plugin_name_ + ".max_pose_age", max_pose_age_);
+  node->get_parameter(plugin_name_ + ".max_transform_age", max_transform_age_);
+  if (!std::isfinite(max_pose_age_) || max_pose_age_ <= 0.0 ||
+    !std::isfinite(max_transform_age_) || max_transform_age_ <= 0.0)
+  {
+    throw std::runtime_error("LuckController freshness limits must be finite and positive");
+  }
   node->get_parameter(plugin_name_ + ".collision_horizon", collision_horizon_);
   node->get_parameter(plugin_name_ + ".avoidance_angular_span", avoidance_angular_span_);
   node->get_parameter(
@@ -297,14 +328,14 @@ void LuckController::configure(
       std::lock_guard<std::mutex> lock(execution_feedback_mutex_);
       execution_feedback_linear_ = msg->twist.twist.linear.x;
       execution_feedback_angular_ = msg->twist.twist.angular.z;
-      execution_feedback_received_seconds_ = clock_->now().seconds();
+      execution_feedback_received_seconds_ = rclcpp::Time(msg->header.stamp).seconds();
     });
   execution_imu_sub_ = node->create_subscription<sensor_msgs::msg::Imu>(
     execution_feedback_imu_topic_, rclcpp::SensorDataQoS(),
     [this](const sensor_msgs::msg::Imu::SharedPtr msg) {
       std::lock_guard<std::mutex> lock(execution_feedback_mutex_);
       execution_imu_angular_ = msg->angular_velocity.z;
-      execution_imu_received_seconds_ = clock_->now().seconds();
+      execution_imu_received_seconds_ = rclcpp::Time(msg->header.stamp).seconds();
     });
 
   RCLCPP_INFO(
@@ -436,6 +467,15 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
     throw nav2_core::PlannerException("LuckController has no path");
   }
   last_compute_seconds_ = clock_->now().seconds();
+  if (!std::isfinite(velocity.linear.x) || !std::isfinite(velocity.angular.z)) {
+    throw nav2_core::PlannerException("LuckController refuses non-finite feedback velocity");
+  }
+  measured_linear_ = velocity.linear.x;
+  measured_angular_ = velocity.angular.z;
+  const double pose_age = last_compute_seconds_ - rclcpp::Time(pose.header.stamp).seconds();
+  if (pose_age > max_pose_age_ || pose_age < -0.30) {
+    throw nav2_core::PlannerException("LuckController refuses stale/future robot pose");
+  }
 
   const auto transformed_plan = transformPlan(pose);
   if (transformed_plan.poses.empty()) {
@@ -517,7 +557,6 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
   const double target_x = std::cos(robot_yaw) * dx + std::sin(robot_yaw) * dy;
   const double target_y = -std::sin(robot_yaw) * dx + std::cos(robot_yaw) * dy;
   const double carrot_distance_sq = target_x * target_x + target_y * target_y;
-  const double carrot_distance = std::sqrt(carrot_distance_sq);
   // Adaptive tracking may shorten the carrot to 0.12 m, but collision
   // prediction must retain the original far-field safety distance.
   const double collision_check_distance = std::min(distance_to_goal, lookahead_dist_);
@@ -529,6 +568,7 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
   command.header = pose.header;
   double linear = 0.0;
   double angular = 0.0;
+  double rotation_speed_limit = max_angular_vel_;
 
   const double final_heading_distance =
     std::min(goal_rotate_dist_, active_position_tolerance);
@@ -539,13 +579,19 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
   if (final_heading_phase) {
     rotate_mode_ = true;
     const double yaw_error_margin =
-      std::max(0.0, std::abs(goal_yaw_error) - active_yaw_tolerance);
-    const double braking_limit = std::sqrt(
-      2.0 * max_angular_decel_ * yaw_error_margin);
+      std::max(0.0, std::abs(goal_yaw_error) - 0.5 * active_yaw_tolerance);
+    const double braking_limit = motion_prediction::stoppingSpeed(
+      yaw_error_margin, rotate_braking_decel_, motion_response_delay_);
+    rotation_speed_limit = braking_limit;
     const double final_angular_limit = std::min(rotate_angular_vel_, braking_limit);
     angular = std::copysign(
       std::min(rotate_gain_ * std::abs(goal_yaw_error), final_angular_limit),
       goal_yaw_error);
+  } else if (distance_to_goal <= final_heading_distance &&
+    std::abs(goal_yaw_error) <= active_yaw_tolerance)
+  {
+    // Do not restart minimum-speed translation while waiting for GoalChecker.
+    rotate_mode_ = false;
   } else {
     if (rotate_mode_ && std::abs(angle_to_carrot) <= rotate_exit_angle_) {
       rotate_mode_ = false;
@@ -568,13 +614,14 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
       // is still corrected continuously while driving; this does not add a
       // second acceleration-rate limiter or a settle pause.
       const double rotate_error_margin =
-        std::max(0.0, std::abs(angle_to_carrot) - rotate_exit_angle_);
-      const double rotate_braking_limit = std::sqrt(
-        2.0 * rotate_braking_decel_ * rotate_error_margin);
+        std::max(0.0, std::abs(angle_to_carrot) - 0.5 * rotate_exit_angle_);
+      const double rotate_braking_limit = motion_prediction::stoppingSpeed(
+        rotate_error_margin, rotate_braking_decel_, motion_response_delay_);
+      rotation_speed_limit = rotate_braking_limit;
       const double rotate_angular_limit =
         std::min(
         rotate_angular_vel_,
-        std::max(min_rotate_angular_vel_, rotate_braking_limit));
+        rotate_braking_limit);
       angular = std::copysign(
         std::min(rotate_gain_ * std::abs(angle_to_carrot), rotate_angular_limit),
         angle_to_carrot);
@@ -590,12 +637,37 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
         (desired_linear_vel_ - min_linear_vel_) * approach_ratio;
 
       linear = std::min(desired_linear_vel_, approach_speed) * heading_scale * curvature_scale;
+      const double stopping_limit = motion_prediction::stoppingSpeed(
+        std::max(0.0, remaining - 0.5 * active_position_tolerance),
+        linear_braking_decel_, motion_response_delay_);
+      linear = std::min(linear, stopping_limit);
+      if (use_corner_speed_preview_) {
+        std::vector<corner_speed::Point> points;
+        points.reserve(transformed_plan.poses.size());
+        double total = 0.0;
+        for (const auto & p : transformed_plan.poses) {
+          const corner_speed::Point next{p.pose.position.x, p.pose.position.y};
+          if (!points.empty()) {
+            total += std::hypot(next.x-points.back().x, next.y-points.back().y);
+          }
+          points.push_back(next);
+        }
+        const double preview_limit = corner_speed::limit(points,
+          std::max(0.0, total-target.remaining_path), desired_linear_vel_,
+          max_angular_vel_, linear_braking_decel_, motion_response_delay_);
+        if (preview_limit < linear) {
+          RCLCPP_DEBUG(logger_, "Corner preview caps v %.3f -> %.3f", linear, preview_limit);
+        }
+        linear = std::min(linear, preview_limit);
+      }
       // Pure Pursuit already uses the geometric lookahead bearing through
       // curvature. The former future-segment tangent term could point to the
       // opposite side at a replanned corner and reverse the steering command.
       // Keep path_heading_gain in the parameter file for backward-compatible
       // diagnostics, but do not feed a future segment tangent into steering.
-      angular = linear * curvature;
+      angular = motion_prediction::steering(
+        linear, angle_to_carrot, std::sqrt(carrot_distance_sq), measured_angular_,
+        steering_preview_time_, steering_correction_limit_);
     }
   }
 
@@ -613,6 +685,7 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
       std::abs(linear) < 1.0e-4 && std::abs(angular) > 1.0e-4;
     std::lock_guard<std::mutex> lock(execution_feedback_mutex_);
     const bool imu_fresh = execution_imu_received_seconds_ >= 0.0 &&
+      now_seconds - execution_imu_received_seconds_ >= -0.05 &&
       now_seconds - execution_imu_received_seconds_ <= execution_feedback_timeout_;
     const bool imu_reports_rotation = imu_fresh &&
       std::isfinite(execution_imu_angular_) &&
@@ -625,7 +698,8 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
         std::max(0.0, now_seconds - rotation_still_since_seconds_);
       if (still_duration >= rotation_breakaway_delay_) {
         angular = std::copysign(
-          std::max(std::abs(angular), rotation_breakaway_angular_vel_), angular);
+          std::min(rotation_speed_limit,
+          std::max(std::abs(angular), rotation_breakaway_angular_vel_)), angular);
         rotation_breakaway_active = true;
         RCLCPP_WARN_THROTTLE(
           logger_, *clock_, 1000,
@@ -653,8 +727,21 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
       *(costmap_->getMutex()));
     pose_cost = costAtPose(pose.pose.position.x, pose.pose.position.y);
     if (linear > 0.0) {
+      const double tracking_linear = linear;
       linear *= getParameterCostScale(pose_cost);
-      linear = std::max(linear, min_linear_vel_);
+      // A minimum-speed floor must never undo terminal braking/cost regulation.
+      // Preserve the requested arc when cost regulation changes forward speed.
+      angular *= linear / tracking_linear;
+      // Saturating yaw alone widens a tight turn and can cut across the path.
+      // Reduce both components together instead of changing the curvature.
+      if (std::abs(angular) > max_angular_vel_) {
+        const double scale = max_angular_vel_ / std::abs(angular);
+        linear *= scale;
+        angular *= scale;
+      }
+      linear *= motion_prediction::trackingSpeedScale(
+        angle_to_carrot, angular, measured_angular_,
+        rotate_exit_angle_, rotate_enter_angle_, max_angular_vel_);
     }
 
     angular = clamp(angular, -max_angular_vel_, max_angular_vel_);
@@ -666,6 +753,9 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
       const double angular_delta = max_angular_accel_ * control_period_;
       angular = clamp(
         angular, velocity.angular.z - angular_delta, velocity.angular.z + angular_delta);
+    }
+    if (rotate_mode_) {
+      angular = clamp(angular, -rotation_speed_limit, rotation_speed_limit);
     }
 
     const double nominal_linear = linear;
@@ -969,7 +1059,12 @@ nav_msgs::msg::Path LuckController::transformPlan(
   try {
     const auto transform = tf_->lookupTransform(
       robot_pose.header.frame_id, global_plan_.header.frame_id,
-      tf2::TimePointZero, tf2::durationFromSec(transform_tolerance_));
+      tf2::TimePointZero, tf2::durationFromSec(0.0));
+    const double transform_age =
+      clock_->now().seconds() - rclcpp::Time(transform.header.stamp).seconds();
+    if (transform_age > max_transform_age_ || transform_age < -0.30) {
+      throw nav2_core::PlannerException("LuckController refuses stale/future path TF");
+    }
     transformed.poses.reserve(global_plan_.poses.size());
     for (const auto & path_pose : global_plan_.poses) {
       geometry_msgs::msg::PoseStamped output;
@@ -991,25 +1086,46 @@ LuckController::TrackingTarget LuckController::selectTrackingTarget(
 {
   std::size_t nearest = 0;
   double nearest_sq = std::numeric_limits<double>::max();
+  double nearest_fraction = 0.0;
   for (std::size_t i = 0; i < path.poses.size(); ++i) {
-    const double dx = path.poses[i].pose.position.x - robot_pose.pose.position.x;
-    const double dy = path.poses[i].pose.position.y - robot_pose.pose.position.y;
+    const auto & a = path.poses[i].pose.position;
+    const auto & b = path.poses[std::min(i + 1, path.poses.size() - 1)].pose.position;
+    const double sx = b.x - a.x;
+    const double sy = b.y - a.y;
+    const double length_sq = sx * sx + sy * sy;
+    const double fraction = length_sq > 1.0e-12 ? std::clamp(
+      ((robot_pose.pose.position.x - a.x) * sx +
+      (robot_pose.pose.position.y - a.y) * sy) / length_sq, 0.0, 1.0) : 0.0;
+    const double dx = a.x + fraction * sx - robot_pose.pose.position.x;
+    const double dy = a.y + fraction * sy - robot_pose.pose.position.y;
     const double distance_sq = dx * dx + dy * dy;
     if (distance_sq < nearest_sq) {
       nearest_sq = distance_sq;
       nearest = i;
+      nearest_fraction = fraction;
     }
   }
 
   TrackingTarget result;
   result.pose = path.poses[nearest];
+  if (nearest + 1 < path.poses.size()) {
+    const auto & b = path.poses[nearest + 1].pose.position;
+    auto & a = result.pose.pose.position;
+    a.x += nearest_fraction * (b.x - a.x);
+    a.y += nearest_fraction * (b.y - a.y);
+  }
   const double robot_yaw = tf2::getYaw(robot_pose.pose.orientation);
   const double nearest_dx = result.pose.pose.position.x - robot_pose.pose.position.x;
   const double nearest_dy = result.pose.pose.position.y - robot_pose.pose.position.y;
   result.cross_track_error =
     -std::sin(robot_yaw) * nearest_dx + std::cos(robot_yaw) * nearest_dy;
 
-  double accumulated = 0.0;
+  // Start from the continuous segment projection, not the nearest sampled
+  // vertex. Otherwise the carrot jumps whenever the nearest vertex changes.
+  const double consumed = nearest + 1 < path.poses.size() ? nearest_fraction *
+    std::hypot(path.poses[nearest + 1].pose.position.x - path.poses[nearest].pose.position.x,
+    path.poses[nearest + 1].pose.position.y - path.poses[nearest].pose.position.y) : 0.0;
+  double accumulated = -consumed;
   std::size_t selected = nearest;
   for (std::size_t i = nearest; i + 1 < path.poses.size(); ++i) {
     const auto & a = path.poses[i].pose.position;
@@ -1041,7 +1157,7 @@ LuckController::TrackingTarget LuckController::selectTrackingTarget(
     result.tangent_yaw = tf2::getYaw(path.poses.back().pose.orientation);
   }
 
-  result.remaining_path = 0.0;
+  result.remaining_path = -consumed;
   for (std::size_t i = nearest; i + 1 < path.poses.size(); ++i) {
     const auto & a = path.poses[i].pose.position;
     const auto & b = path.poses[i + 1].pose.position;
@@ -1057,7 +1173,8 @@ LuckController::TrajectoryEvaluation LuckController::evaluateTrajectory(
   double angular_velocity,
   double max_distance,
   double nominal_linear,
-  double nominal_angular) const
+  double nominal_angular,
+  bool execution_prediction) const
 {
   TrajectoryEvaluation result;
   result.linear = linear_velocity;
@@ -1089,23 +1206,62 @@ LuckController::TrajectoryEvaluation LuckController::evaluateTrajectory(
     return result;
   }
 
-  if (std::abs(linear_velocity) < 1.0e-4 && std::abs(angular_velocity) < 1.0e-4) {
+  if (!execution_prediction && std::abs(linear_velocity) < 1.0e-4 &&
+    std::abs(angular_velocity) < 1.0e-4 &&
+    std::abs(measured_linear_) < 1.0e-4 && std::abs(measured_angular_) < 1.0e-4)
+  {
     result.valid = true;
     result.valid_candidate_count = 1;
     result.score = 0.0;
     return result;
   }
 
-  const double dt = std::min(0.10, control_period_);
+  const double dt = std::min(0.05, control_period_);
   double elapsed = 0.0;
   double travelled = 0.0;
-  while (elapsed < collision_horizon_) {
-    const double step = std::min(dt, collision_horizon_ - elapsed);
-    const double midpoint_yaw = yaw + 0.5 * angular_velocity * step;
-    x += linear_velocity * std::cos(midpoint_yaw) * step;
-    y += linear_velocity * std::sin(midpoint_yaw) * step;
-    yaw = normalizeAngle(yaw + angular_velocity * step);
-    travelled += std::abs(linear_velocity) * step;
+  double predicted_linear = execution_prediction ? measured_linear_ : linear_velocity;
+  double predicted_angular = execution_prediction ? measured_angular_ : angular_velocity;
+  // Validate both instantaneous execution AND measured-velocity/coasting
+  // execution. Slower acceleration must not hide obstacles in the ideal arc.
+  // The second rollout also requires a collision-free braking tail; a rotate
+  // or reverse command cannot instantly erase existing forward momentum.
+  const double command_end = collision_horizon_ +
+    (execution_prediction ? motion_response_delay_ : 0.0);
+  const double horizon = command_end + (execution_prediction ?
+    std::max(std::max(std::abs(measured_linear_), std::abs(linear_velocity)) /
+    linear_braking_decel_,
+    std::max(std::abs(measured_angular_), std::abs(angular_velocity)) /
+    rotate_braking_decel_) + dt : 0.0);
+  if (!std::isfinite(horizon) || horizon > 6.0) {return result;}
+  while (elapsed < horizon) {
+    double step = std::min(dt, horizon - elapsed);
+    if (execution_prediction) {
+      if (elapsed < motion_response_delay_) {
+        step = std::min(step, motion_response_delay_ - elapsed);
+      } else if (elapsed < command_end) {
+        step = std::min(step, command_end - elapsed);
+      }
+    }
+    double next_linear = predicted_linear;
+    double next_angular = predicted_angular;
+    if (execution_prediction && elapsed >= motion_response_delay_) {
+      const bool braking = elapsed >= command_end;
+      next_linear = motion_prediction::advanceRate(
+        predicted_linear, braking ? 0.0 : linear_velocity, 0.20,
+        linear_braking_decel_, step);
+      next_angular = motion_prediction::advanceRate(
+        predicted_angular, braking ? 0.0 : angular_velocity, 0.30,
+        rotate_braking_decel_, step);
+    }
+    const double step_linear = 0.5 * (predicted_linear + next_linear);
+    const double step_angular = 0.5 * (predicted_angular + next_angular);
+    const double midpoint_yaw = yaw + 0.5 * step_angular * step;
+    x += step_linear * std::cos(midpoint_yaw) * step;
+    y += step_linear * std::sin(midpoint_yaw) * step;
+    yaw = normalizeAngle(yaw + step_angular * step);
+    travelled += std::abs(step_linear) * step;
+    predicted_linear = next_linear;
+    predicted_angular = next_angular;
     elapsed += step;
 
     unsigned int mx = 0;
@@ -1137,7 +1293,7 @@ LuckController::TrajectoryEvaluation LuckController::evaluateTrajectory(
     predicted_pose.pose.orientation.w = std::cos(0.5 * yaw);
     result.path.poses.push_back(predicted_pose);
 
-    if (max_distance > 0.0 && travelled > max_distance) {
+    if (!execution_prediction && max_distance > 0.0 && travelled > max_distance) {
       break;
     }
   }
@@ -1186,6 +1342,14 @@ LuckController::TrajectoryEvaluation LuckController::evaluateTrajectory(
   }
   result.valid = true;
   result.valid_candidate_count = 1;
+  if (!execution_prediction) {
+    const auto executed = evaluateTrajectory(
+      robot_pose, target, linear_velocity, angular_velocity, max_distance,
+      nominal_linear, nominal_angular, true);
+    if (!executed.valid) {return executed;}
+    result.max_cost = std::max(result.max_cost, executed.max_cost);
+    result.max_center_cost = std::max(result.max_center_cost, executed.max_center_cost);
+  }
   return result;
 }
 
@@ -1221,8 +1385,7 @@ LuckController::TrajectoryEvaluation LuckController::selectSafeTrajectory(
       static_cast<double>(linear_samples - 1);
     const double linear_scale =
       1.0 - ratio * (1.0 - avoidance_min_linear_scale_);
-    const double candidate_linear = std::max(
-      min_linear_vel_, nominal_linear * linear_scale);
+    const double candidate_linear = nominal_linear * linear_scale;
 
     for (int angular_index = -angular_half; angular_index <= angular_half; ++angular_index) {
       const double normalized_offset = angular_half > 0 ?
@@ -1423,7 +1586,13 @@ void LuckController::publishDebug(
     std::numeric_limits<double>::quiet_NaN(),
     std::numeric_limits<double>::quiet_NaN(),
     effective_lookahead,
-    lookahead_bend};
+    lookahead_bend,
+    // Append only: keep all existing bag-analysis indexes compatible.
+    measured_linear_,
+    measured_angular_,
+    motion_response_delay_,
+    linear_braking_decel_,
+    steering_preview_time_};
   tracking_pub_->publish(debug);
 }
 

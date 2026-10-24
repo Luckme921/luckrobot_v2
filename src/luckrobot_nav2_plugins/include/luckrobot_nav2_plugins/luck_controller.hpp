@@ -50,6 +50,7 @@ public:
   void setSpeedLimit(const double & speed_limit, const bool & percentage) override;
 
 private:
+  friend struct LuckControllerTestAccess;
   struct TrackingTarget
   {
     geometry_msgs::msg::PoseStamped pose;
@@ -86,7 +87,8 @@ private:
     double angular_velocity,
     double max_distance,
     double nominal_linear,
-    double nominal_angular) const;
+    double nominal_angular,
+    bool execution_prediction = false) const;
   TrajectoryEvaluation selectSafeTrajectory(
     const geometry_msgs::msg::PoseStamped & robot_pose,
     const TrackingTarget & target,
@@ -166,6 +168,7 @@ private:
   double rotate_angular_vel_{0.25};
   double min_rotate_angular_vel_{0.08};
   double lookahead_dist_{0.35};
+  bool use_corner_speed_preview_{true};
   // A long fixed lookahead cuts across the inside of short planner corners.
   // Blend down to this near-field target only when the near and far path
   // bearings diverge; straight-path behavior remains unchanged.
@@ -184,6 +187,14 @@ private:
   // before rotate_exit_angle.  This is intentionally separate from the command
   // rate limiter because velocity_smoother and the chassis both add lag.
   double rotate_braking_decel_{0.20};
+  double motion_response_delay_{0.25};
+  double linear_braking_decel_{0.35};
+  double steering_preview_time_{0.20};
+  double steering_correction_limit_{0.08};
+  // One immutable body-frame feedback snapshot per compute cycle, shared by
+  // all candidate rollouts. Nav2 supplies the filtered base-frame twist.
+  double measured_linear_{0.0};
+  double measured_angular_{0.0};
   double path_heading_gain_{0.60};
   double curvature_speed_gain_{1.0};
   double cost_speed_gain_{0.55};
@@ -193,6 +204,8 @@ private:
   double max_angular_accel_{0.0};
   double max_angular_decel_{0.80};
   double transform_tolerance_{1.0};
+  double max_pose_age_{0.35};
+  double max_transform_age_{0.75};
   double collision_horizon_{1.0};
   double avoidance_angular_span_{0.35};
   double avoidance_min_linear_scale_{0.35};
@@ -209,7 +222,7 @@ private:
   // and has a strict per-navigation-goal time budget.
   double reverse_escape_linear_vel_{0.04};
   double reverse_escape_angular_vel_{0.12};
-  double reverse_escape_timeout_{2.0};
+  double reverse_escape_timeout_{3.0};
   double reverse_escape_min_cost_drop_{2.0};
   double obstacle_wait_timeout_{1.5};
   double obstacle_failure_timeout_{5.0};
