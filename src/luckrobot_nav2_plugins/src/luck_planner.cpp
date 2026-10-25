@@ -1,5 +1,7 @@
 #include "luckrobot_nav2_plugins/luck_planner.hpp"
 #include "luckrobot_nav2_plugins/path_rounding.hpp"
+#include "luckrobot_nav2_plugins/curve_optimizer.hpp"
+#include <chrono>
 
 #include <algorithm>
 #include <array>
@@ -73,6 +75,11 @@ void LuckPlanner::configure(
 
   declare_parameter_if_not_declared(
     node, plugin_name_ + ".allow_unknown", rclcpp::ParameterValue(allow_unknown_));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".use_astar", rclcpp::ParameterValue(use_astar_));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".constrained_curve_enabled",
+    rclcpp::ParameterValue(constrained_curve_enabled_));
+  declare_parameter_if_not_declared(node, plugin_name_ + ".preferred_turning_radius",
+    rclcpp::ParameterValue(preferred_turning_radius_));
   declare_parameter_if_not_declared(
     node, plugin_name_ + ".tolerance", rclcpp::ParameterValue(tolerance_));
   declare_parameter_if_not_declared(
@@ -106,6 +113,9 @@ void LuckPlanner::configure(
     rclcpp::ParameterValue(route_reuse_start_tolerance_));
 
   node->get_parameter(plugin_name_ + ".allow_unknown", allow_unknown_);
+  node->get_parameter(plugin_name_ + ".use_astar", use_astar_);
+  node->get_parameter(plugin_name_ + ".constrained_curve_enabled", constrained_curve_enabled_);
+  node->get_parameter(plugin_name_ + ".preferred_turning_radius", preferred_turning_radius_);
   node->get_parameter(plugin_name_ + ".tolerance", tolerance_);
   node->get_parameter(plugin_name_ + ".cost_penalty", cost_penalty_);
   node->get_parameter(plugin_name_ + ".turn_penalty", turn_penalty_);
@@ -126,7 +136,9 @@ void LuckPlanner::configure(
   node->get_parameter(
     plugin_name_ + ".route_reuse_start_tolerance", route_reuse_start_tolerance_);
 
-  if (!std::isfinite(corner_rounding_distance_) || corner_rounding_distance_ < 0.0 ||
+  if (!std::isfinite(preferred_turning_radius_) || preferred_turning_radius_<.20 ||
+    preferred_turning_radius_>1.0 ||
+    !std::isfinite(corner_rounding_distance_) || corner_rounding_distance_ < 0.0 ||
     corner_rounding_distance_ > 0.40 ||
     tolerance_ < 0.0 || interpolation_resolution_ <= 0.0 ||
     max_planning_cost_ < 0 || max_planning_cost_ > 252 ||
@@ -139,11 +151,14 @@ void LuckPlanner::configure(
 
   RCLCPP_INFO(
     logger_,
-    "Configured %s: A* cost<=%d, smooth cost<=%d, tolerance=%.2f m, "
+    "Configured %s: grid cost<=%d, smooth cost<=%d, tolerance=%.2f m, "
     "route hysteresis=%s (start %.2f m, goal %.2f m / %.1f deg)",
     plugin_name_.c_str(), max_planning_cost_, smoothing_max_cost_, tolerance_,
     route_hysteresis_enabled_ ? "on" : "off", route_reuse_start_tolerance_,
     route_reuse_goal_tolerance_, route_reuse_goal_yaw_tolerance_ * 180.0 / kPi);
+  RCLCPP_INFO(logger_, "Search=%s, constrained curve=%s, preferred radius=%.2f m",
+    use_astar_ ? "A*" : "Dijkstra", constrained_curve_enabled_ ? "on" : "off",
+    preferred_turning_radius_);
 }
 
 void LuckPlanner::cleanup()
@@ -227,6 +242,17 @@ nav_msgs::msg::Path LuckPlanner::createPlan(
 
   const auto simplified = simplify(cells);
   auto path = cellsToPath(simplified, start, goal);
+  if (constrained_curve_enabled_) {
+    const auto started=std::chrono::steady_clock::now();
+    nav_msgs::msg::Path candidate;
+    const bool solved=optimizeCurve(path,candidate,costmap_,preferred_turning_radius_,.08);
+    const bool accepted=solved && validateCurve(path,candidate);
+    if(accepted) {path=std::move(candidate);}
+    const double ms=std::chrono::duration<double,std::milli>(
+      std::chrono::steady_clock::now()-started).count();
+    RCLCPP_INFO(logger_, "Curve optimization %s (solver=%s): %.1f ms, %zu poses",
+      accepted ? "accepted" : "fallback to checked seed", solved ? "usable" : "failed", ms,path.poses.size());
+  }
   cached_path_ = path;
   cached_goal_ = goal;
   cached_progress_index_ = 0;
@@ -350,6 +376,69 @@ bool LuckPlanner::isTraversable(unsigned int x, unsigned int y) const
   return static_cast<int>(cost) <= max_planning_cost_;
 }
 
+bool LuckPlanner::validateCurve(
+  const nav_msgs::msg::Path & seed, const nav_msgs::msg::Path & candidate) const
+{
+  auto reject=[&](const char * why) {RCLCPP_DEBUG(logger_, "Curve rejected: %s",why);return false;};
+  if(seed.poses.size()<2 || candidate.poses.size()<2) return false;
+  const auto footprint=costmap_ros_->getRobotFootprint();
+  if(footprint.size()<3) return false;
+  auto separation=[](const auto & a,const auto & b) {
+    return std::hypot(a.pose.position.x-b.pose.position.x,a.pose.position.y-b.pose.position.y);
+  };
+  if(separation(seed.poses.front(),candidate.poses.front())>1e-6 ||
+    separation(seed.poses.back(),candidate.poses.back())>1e-6) return false;
+  double seed_length=0, new_length=0;
+  int cost_limit=smoothing_max_cost_;
+  for(size_t i=0;i<seed.poses.size();++i) {
+    Cell c;
+    const auto & p=seed.poses[i].pose.position;
+    if(!costmap_->worldToMap(p.x,p.y,c.x,c.y)) return false;
+    const auto cost=costmap_->getCost(c.x,c.y);
+    if(cost==nav2_costmap_2d::NO_INFORMATION) return reject("seed unknown");
+    cost_limit=std::max(cost_limit,static_cast<int>(cost));
+    if(i) seed_length+=separation(seed.poses[i],seed.poses[i-1]);
+  }
+  cost_limit=std::min(cost_limit,max_planning_cost_);
+  nav2_costmap_2d::FootprintCollisionChecker<nav2_costmap_2d::Costmap2D *> checker(costmap_);
+  Cell previous;
+  bool have_previous=false;
+  for(size_t i=1;i<candidate.poses.size();++i) {
+    const auto & a=candidate.poses[i-1].pose.position;
+    const auto & b=candidate.poses[i].pose.position;
+    if(!std::isfinite(a.x) || !std::isfinite(a.y) ||
+      !std::isfinite(b.x) || !std::isfinite(b.y)) return false;
+    const double length=std::hypot(b.x-a.x,b.y-a.y);
+    new_length+=length;
+    const int n=std::max(1,static_cast<int>(std::ceil(length/(costmap_->getResolution()*.25))));
+    const double yaw=std::atan2(b.y-a.y,b.x-a.x);
+    for(int j=0;j<=n;++j) {
+      const double t=static_cast<double>(j)/n, x=a.x+t*(b.x-a.x), y=a.y+t*(b.y-a.y);
+      Cell c;
+      if(!costmap_->worldToMap(x,y,c.x,c.y)) return false;
+      if(static_cast<int>(costmap_->getCost(c.x,c.y))>cost_limit) return reject("center cost");
+      if(have_previous && !lineIsTraversable(previous,c)) return false;
+      previous=c; have_previous=true;
+      const double cost=checker.footprintCostAtPose(x,y,yaw,footprint);
+      // Inflation encodes clearance for the robot CENTER. Applying that
+      // threshold again at the outline double counts the robot radius.
+      // Match the controller: center <=252, outline excludes lethal/unknown.
+      if(!std::isfinite(cost) || cost<0 || cost>=nav2_costmap_2d::LETHAL_OBSTACLE) return reject("footprint");
+      // Keep the optimization within the searched corridor, avoiding a jump
+      // to another homotopy or a large shortcut through an unobserved region.
+      double nearest=std::numeric_limits<double>::infinity();
+      for(size_t k=1;k<seed.poses.size();++k) {
+        const auto & u=seed.poses[k-1].pose.position; const auto & v=seed.poses[k].pose.position;
+        const double dx=v.x-u.x,dy=v.y-u.y,den=dx*dx+dy*dy;
+        const double r=den>1e-12 ? std::clamp(((x-u.x)*dx+(y-u.y)*dy)/den,0.,1.) : 0.;
+        nearest=std::min(nearest,std::hypot(x-u.x-r*dx,y-u.y-r*dy));
+      }
+      if(nearest>.45) return reject("corridor deviation");
+    }
+  }
+  return new_length<=seed_length*1.25+.05;
+}
+
 bool LuckPlanner::lineIsTraversable(const Cell & start, const Cell & goal) const
 {
   int x0 = static_cast<int>(start.x);
@@ -428,6 +517,7 @@ std::vector<LuckPlanner::Cell> LuckPlanner::search(
       return goal_distance(x, y) <= tolerance_cells && isTraversable(x, y);
     };
   const auto heuristic = [&](unsigned int x, unsigned int y) {
+      if (!use_astar_) {return 0.0;}
       const double distance = goal_distance(x, y);
       return allow_tolerance_goal ? std::max(0.0, distance - tolerance_cells) : distance;
     };

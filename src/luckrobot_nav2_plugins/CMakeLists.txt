@@ -8,6 +8,8 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav2_core REQUIRED)
+find_package(nav2_constrained_smoother REQUIRED)
+find_package(Ceres REQUIRED)
 find_package(nav2_costmap_2d REQUIRED)
 find_package(nav2_util REQUIRED)
 find_package(nav_msgs REQUIRED)
@@ -23,6 +25,7 @@ find_package(tf2_ros REQUIRED)
 add_library(${PROJECT_NAME} SHARED
   src/luck_controller.cpp
   src/luck_planner.cpp
+  src/curve_optimizer.cpp
   src/persistent_camera_layer.cpp
 )
 
@@ -33,6 +36,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
 )
 
 ament_target_dependencies(${PROJECT_NAME}
+  nav2_constrained_smoother
   geometry_msgs
   nav2_core
   nav2_costmap_2d
@@ -47,6 +51,7 @@ ament_target_dependencies(${PROJECT_NAME}
   tf2_geometry_msgs
   tf2_ros
 )
+target_link_libraries(${PROJECT_NAME} Ceres::ceres)
 
 pluginlib_export_plugin_description_file(nav2_core luckrobot_nav2_plugins.xml)
 pluginlib_export_plugin_description_file(nav2_costmap_2d camera_layer_plugins.xml)
@@ -74,6 +79,9 @@ ament_export_dependencies(
 
 if(BUILD_TESTING)
   enable_testing()
+  add_executable(replay_curve_planner ../../tools/replay_curve_planner.cpp)
+  target_link_libraries(replay_curve_planner ${PROJECT_NAME})
+  ament_target_dependencies(replay_curve_planner nav2_costmap_2d)
   add_executable(test_path_rounding ../../tools/test_path_rounding.cpp)
   target_include_directories(test_path_rounding PRIVATE include)
   target_compile_features(test_path_rounding PRIVATE cxx_std_17)

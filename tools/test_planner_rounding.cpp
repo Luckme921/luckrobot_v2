@@ -1,4 +1,5 @@
 #include "luckrobot_nav2_plugins/luck_planner.hpp"
+#include "luckrobot_nav2_plugins/curve_optimizer.hpp"
 #include <cmath>
 #include <stdexcept>
 #include <iostream>
@@ -37,6 +38,35 @@ struct LuckPlannerTestAccess {
       check(fallback.poses[i].pose.position.y==baseline.poses[i].pose.position.y);
     }
     for(unsigned y=0;y<80;++y) for(unsigned x=0;x<80;++x) p.costmap_->setCost(x,y,0);
+    // Native optimizer is exercised, not a mock. Short L in free space can
+    // safely relax toward the diagonal; endpoints and footprint stay valid.
+    geometry_msgs::msg::PoseStamped short_goal=goal;
+    short_goal.pose.position.x=.825;short_goal.pose.position.y=.825;
+    auto short_seed=p.cellsToPath({{20,20},{36,20},{36,36}},start,short_goal);
+    nav_msgs::msg::Path optimized;
+    check(optimizeCurve(short_seed,optimized,p.costmap_,.45,.08));
+    check(p.validateCurve(short_seed,optimized));
+    check(optimized.poses.back().pose.position.x==short_goal.pose.position.x);
+    // Validation must reject obstacles introduced after optimization.
+    unsigned mx,my;
+    const auto midpoint=optimized.poses[optimized.poses.size()/2].pose.position;
+    check(p.costmap_->worldToMap(midpoint.x,midpoint.y,mx,my));
+    p.costmap_->setCost(mx,my,254);
+    check(!p.validateCurve(short_seed,optimized));
+    p.costmap_->setCost(mx,my,255);
+    check(!p.validateCurve(short_seed,optimized));
+    p.costmap_->setCost(mx,my,0);
+    // Inflated clearance at the outline is not a physical collision. Center
+    // inflation is still forbidden; lethal and unknown outline cells are not.
+    unsigned ox,oy;
+    check(p.costmap_->worldToMap(start.pose.position.x,start.pose.position.y-.175,ox,oy));
+    p.costmap_->setCost(ox,oy,253);
+    check(p.validateCurve(short_seed,optimized));
+    p.costmap_->setCost(ox,oy,254);
+    check(!p.validateCurve(short_seed,optimized));
+    p.costmap_->setCost(ox,oy,255);
+    check(!p.validateCurve(short_seed,optimized));
+    p.costmap_->setCost(ox,oy,0);
     // Sparse cached endpoints are free, but a new intervening obstacle blocks reuse.
     p.cached_path_.poses={start,goal};p.cached_goal_=goal;
     p.costmap_->setCost(30,30,254);

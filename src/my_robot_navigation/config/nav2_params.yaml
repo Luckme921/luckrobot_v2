@@ -127,6 +127,9 @@ planner_server:
       max_on_approach_iterations: 1000
     LuckGrid:
       plugin: "luckrobot_nav2_plugins/LuckPlanner"
+      use_astar: false
+      constrained_curve_enabled: true
+      preferred_turning_radius: 0.45
       tolerance: 0.35
       allow_unknown: true
       max_planning_cost: 252

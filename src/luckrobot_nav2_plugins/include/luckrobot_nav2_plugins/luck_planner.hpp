@@ -64,6 +64,8 @@ private:
   bool isTraversable(unsigned int x, unsigned int y) const;
   bool lineIsTraversable(const Cell & start, const Cell & goal) const;
   bool lineIsClear(const Cell & start, const Cell & goal) const;
+  bool validateCurve(const nav_msgs::msg::Path & seed,
+    const nav_msgs::msg::Path & candidate) const;
 
   rclcpp_lifecycle::LifecycleNode::WeakPtr node_;
   std::shared_ptr<tf2_ros::Buffer> tf_;
@@ -75,6 +77,9 @@ private:
   rclcpp::Clock::SharedPtr clock_;
 
   bool allow_unknown_{true};
+  bool use_astar_{true};
+  bool constrained_curve_enabled_{false};
+  double preferred_turning_radius_{0.45};
   double tolerance_{0.35};
   int max_planning_cost_{252};
   int smoothing_max_cost_{100};
