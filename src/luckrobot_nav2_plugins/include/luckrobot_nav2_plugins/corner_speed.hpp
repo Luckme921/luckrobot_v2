@@ -6,11 +6,16 @@
 namespace luckrobot_nav2_plugins::corner_speed
 {
 struct Point {double x; double y;};
+inline double trackingBoost(double cross_error, double heading_error) {
+  // Continuous fade: no extra cruise request when tracking is deteriorating.
+  return 1.0+0.15*std::clamp(1.0-std::abs(cross_error)/.03,0.0,1.0)*
+    std::clamp(1.0-std::abs(heading_error)/.20,0.0,1.0);
+}
 
 // Geometry is sampled in metres, never in planner vertex counts. This is a
 // speed constraint only: it neither rounds corners nor certifies a safe arc.
 inline double limit(const std::vector<Point> & path, double progress, double cruise,
-  double max_yaw, double decel, double delay)
+  double max_yaw, double decel, double delay, double lateral_accel=.15)
 {
   if (path.size() < 3) {return cruise;}
   std::vector<double> arc(path.size(), 0.0);
@@ -42,7 +47,7 @@ inline double limit(const std::vector<Point> & path, double progress, double cru
       std::max(10.0, product > 1e-9 ? 2.0*std::abs(ax*by-ay*bx)/product : 10.0) :
       (product > 1e-9 ? 2.0*std::abs(ax*by-ay*bx)/product : 0.0);
     if (k < 1e-6) {continue;}
-    const double turn = std::min({cruise, 0.8*max_yaw/k, std::sqrt(0.15/k)});
+    const double turn = std::min({cruise, 0.8*max_yaw/k, std::sqrt(lateral_accel/k)});
     // Start braking before the geometry window, with 5 cm extra margin.
     // Solve d >= v*T + (v^2-turn^2)/(2*a). Never demand below turn speed
     // solely because no braking distance remains; existing tracking may do so.

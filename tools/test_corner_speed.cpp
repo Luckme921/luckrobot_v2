@@ -38,5 +38,13 @@ int main()
     check(std::abs(fast-limit(dense,s,.40,.80,.35,.25))<1e-8);
   }
   check(limit(left,.70,.40,.70,.35,.25)<.20);
+  check(std::abs(trackingBoost(0,0)-1.15)<1e-12);
+  check(trackingBoost(.03,0)==1.0 && trackingBoost(0,.20)==1.0);
+  check(trackingBoost(.01,.1)==trackingBoost(-.01,-.1));
+  for(int i=0;i<190;++i) {
+    double s=i*.01;
+    auto v=limit(left,s,.4,.8,.35,.25,.20);
+    check(v<=.4 && v>=limit(left,s,.4,.8,.35,.25,.15)-1e-10);
+  }
   std::cout<<"PASS straight, mirrored corners, density, duplicates, hairpin, S turn and braking onset\n";
 }

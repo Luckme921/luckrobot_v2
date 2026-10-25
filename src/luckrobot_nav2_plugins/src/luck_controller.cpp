@@ -78,6 +78,7 @@ void LuckController::configure(
   declare_double("min_rotate_angular_vel", min_rotate_angular_vel_);
   declare_double("lookahead_dist", lookahead_dist_);
   declare_bool("use_corner_speed_preview", use_corner_speed_preview_);
+  declare_bool("use_tracking_gated_cruise", use_tracking_gated_cruise_);
   declare_double("corner_lookahead_dist", corner_lookahead_dist_);
   declare_double("corner_lookahead_start_angle", corner_lookahead_start_angle_);
   declare_double("corner_lookahead_full_angle", corner_lookahead_full_angle_);
@@ -154,6 +155,7 @@ void LuckController::configure(
   node->get_parameter(plugin_name_ + ".min_rotate_angular_vel", min_rotate_angular_vel_);
   node->get_parameter(plugin_name_ + ".lookahead_dist", lookahead_dist_);
   node->get_parameter(plugin_name_ + ".use_corner_speed_preview", use_corner_speed_preview_);
+  node->get_parameter(plugin_name_ + ".use_tracking_gated_cruise", use_tracking_gated_cruise_);
   node->get_parameter(plugin_name_ + ".corner_lookahead_dist", corner_lookahead_dist_);
   node->get_parameter(
     plugin_name_ + ".corner_lookahead_start_angle", corner_lookahead_start_angle_);
@@ -642,9 +644,13 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
       }
     } else {
       const double heading_scale = clamp(std::cos(std::abs(angle_to_carrot)), 0.25, 1.0);
-      const double curvature_scale = clamp(
+      double curvature_scale = clamp(
         1.0 / (1.0 + curvature_speed_gain_ * std::abs(curvature)), 0.30, 1.0);
       const double remaining = std::max(distance_to_goal, target.remaining_path);
+      if(use_tracking_gated_cruise_ && remaining>approach_dist_) {
+        curvature_scale=std::min(1.0,curvature_scale*corner_speed::trackingBoost(
+          target.cross_track_error,angle_to_carrot));
+      }
       const double approach_ratio = clamp(
         (remaining - active_position_tolerance) /
         std::max(approach_dist_ - active_position_tolerance, 1.0e-3), 0.0, 1.0);
@@ -676,7 +682,8 @@ geometry_msgs::msg::TwistStamped LuckController::computeVelocityCommands(
         }
         const double preview_limit = corner_speed::limit(points,
           std::max(0.0, total-target.remaining_path), desired_linear_vel_,
-          max_angular_vel_, linear_braking_decel_, motion_response_delay_);
+          max_angular_vel_, linear_braking_decel_, motion_response_delay_,
+          use_tracking_gated_cruise_ ? .20 : .15);
         if (preview_limit < linear) {
           RCLCPP_DEBUG(logger_, "Corner preview caps v %.3f -> %.3f", linear, preview_limit);
         }

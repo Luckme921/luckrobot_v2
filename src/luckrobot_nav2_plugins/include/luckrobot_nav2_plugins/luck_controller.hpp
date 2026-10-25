@@ -169,6 +169,7 @@ private:
   double min_rotate_angular_vel_{0.08};
   double lookahead_dist_{0.35};
   bool use_corner_speed_preview_{true};
+  bool use_tracking_gated_cruise_{false};
   // A long fixed lookahead cuts across the inside of short planner corners.
   // Blend down to this near-field target only when the near and far path
   // bearings diverge; straight-path behavior remains unchanged.
