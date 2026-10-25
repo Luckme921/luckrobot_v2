@@ -50,6 +50,18 @@ int main()
   check(env::blend(.2,.4,0,0)==.25);
   check(env::blend(.2,.4,.05,0)==.2);
   check(env::blend(.2,.1,0,0)==.1);
+  check(env::blend(.2,.4,.009,.049)==.25);
+  check(env::blend(.2,.4,-.009,-.049)==.25);
+  check(env::blend(.2,.4,0,.20)==.2);
+  // All confidence levels retain immediate braking and the original uplift cap.
+  for(int i=0;i<=100;++i) {
+    const double cross=i*.001;
+    const double v=env::blend(.2,.4,cross,.08);
+    check(v>=.2 && v<=.25);
+    check(env::blend(.2,.1,cross,.08)==.1);
+    check(std::abs(v-env::blend(.2,.4,-cross,-.08))<1e-12);
+    if(i) check(v<=env::blend(.2,.4,cross-.001,.08)+1e-12);
+  }
   std::vector<Point> broad,tight;
   for(int i=0;i<=400;++i) {
     double a=i*.01;

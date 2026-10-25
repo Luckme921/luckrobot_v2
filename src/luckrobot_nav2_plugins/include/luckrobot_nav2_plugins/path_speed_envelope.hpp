@@ -41,9 +41,17 @@ inline double limit(const std::vector<Point>& path,double progress,double cruise
   }
   return result;
 }
+inline double trackingConfidence(double error,double quiet,double stop) {
+  const double u=std::clamp((std::abs(error)-quiet)/(stop-quiet),0.,1.);
+  return 1-u*u*(3-2*u);
+}
 inline double blend(double old_speed,double envelope,double cross,double yaw_error) {
-  double weight=std::clamp(1-std::abs(cross)/.05,0.,1.)*
-    std::clamp(1-std::abs(yaw_error)/.20,0.,1.);
+  // Small errors should not modulate cruise on every feedback sample. The
+  // quiet region has zero slope; confidence still vanishes at the original
+  // 5 cm / 0.20 rad/s limits. This is not a temporal filter: a lower safe
+  // envelope takes effect immediately, with no delayed braking.
+  double weight=trackingConfidence(cross,.01,.05)*
+    trackingConfidence(yaw_error,.05,.20);
   // First rollout: cap uplift, never lift the computed feasible envelope.
   double requested=old_speed+weight*(std::min(envelope,old_speed*1.25)-old_speed);
   return std::min(envelope,requested);
