@@ -248,10 +248,11 @@ nav_msgs::msg::Path LuckPlanner::createPlan(
     const bool solved=optimizeCurve(path,candidate,costmap_,preferred_turning_radius_,.08);
     const bool accepted=solved && validateCurve(path,candidate);
     if(accepted) {path=std::move(candidate);}
+    else {path=cellsToPath(simplified,start,goal,true);}
     const double ms=std::chrono::duration<double,std::milli>(
       std::chrono::steady_clock::now()-started).count();
     RCLCPP_INFO(logger_, "Curve optimization %s (solver=%s): %.1f ms, %zu poses",
-      accepted ? "accepted" : "fallback to checked seed", solved ? "usable" : "failed", ms,path.poses.size());
+      accepted ? "accepted" : "fallback to independently rounded corners", solved ? "usable" : "failed", ms,path.poses.size());
   }
   cached_path_ = path;
   cached_goal_ = goal;
@@ -679,7 +680,7 @@ std::vector<LuckPlanner::Cell> LuckPlanner::simplify(const std::vector<Cell> & c
 nav_msgs::msg::Path LuckPlanner::cellsToPath(
   const std::vector<Cell> & cells,
   const geometry_msgs::msg::PoseStamped & start,
-  const geometry_msgs::msg::PoseStamped & goal) const
+  const geometry_msgs::msg::PoseStamped & goal, bool local_fallback) const
 {
   nav_msgs::msg::Path path;
   path.header.frame_id = global_frame_;
@@ -713,7 +714,11 @@ nav_msgs::msg::Path LuckPlanner::cellsToPath(
     const auto footprint = costmap_ros_->getRobotFootprint();
     std::vector<path_rounding::Point> sparse;
     for (const auto & p : points) {sparse.push_back({p.first,p.second});}
-    const auto rounded = path_rounding::round(sparse, corner_rounding_distance_,
+    // Make the fallback locally smooth too: each corner independently shrinks
+    // its blend until valid, preserving successful corners if Ceres later fails.
+    const double trim_limit=local_fallback ?
+      std::max(corner_rounding_distance_,preferred_turning_radius_) : corner_rounding_distance_;
+    const auto rounded = path_rounding::round(sparse, trim_limit,
       std::min(interpolation_resolution_,costmap_->getResolution()*.25),
       [&](path_rounding::Point a, path_rounding::Point b) {
         Cell ca,cb;
@@ -722,12 +727,14 @@ nav_msgs::msg::Path LuckPlanner::cellsToPath(
           footprint.size()<3) {return false;}
         const double yaw=std::atan2(b.y-a.y,b.x-a.x);
         const int n=std::max(1,static_cast<int>(std::ceil(
-          path_rounding::distance(a,b)/(costmap_->getResolution()*.5))));
+          path_rounding::distance(a,b)/(costmap_->getResolution()*.25))));
         for (int j=0;j<=n;++j) {
           const double t=static_cast<double>(j)/n;
           const double cost=checker.footprintCostAtPose(
             a.x+t*(b.x-a.x),a.y+t*(b.y-a.y),yaw,footprint);
-          if (!std::isfinite(cost) || cost<0 || cost>=nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE) {
+          const double obstacle_threshold=local_fallback ?
+            nav2_costmap_2d::LETHAL_OBSTACLE : nav2_costmap_2d::INSCRIBED_INFLATED_OBSTACLE;
+          if (!std::isfinite(cost) || cost<0 || cost>=obstacle_threshold) {
             return false;
           }
         }

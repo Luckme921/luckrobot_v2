@@ -53,7 +53,7 @@ private:
   nav_msgs::msg::Path cellsToPath(
     const std::vector<Cell> & cells,
     const geometry_msgs::msg::PoseStamped & start,
-    const geometry_msgs::msg::PoseStamped & goal) const;
+    const geometry_msgs::msg::PoseStamped & goal, bool local_fallback = false) const;
   bool buildReusablePath(
     const geometry_msgs::msg::PoseStamped & start,
     const geometry_msgs::msg::PoseStamped & goal,

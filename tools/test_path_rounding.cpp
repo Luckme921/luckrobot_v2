@@ -36,5 +36,19 @@ int main() {
   };
   auto narrow=round(l,.25,.01,safe);
   for(size_t i=1;i<narrow.size();++i) check(safe(narrow[i-1],narrow[i]));
+  // An unroundable first corner must not cancel a feasible second corner.
+  std::vector<Point> two{{0,0},{1,0},{1,1},{2,1}};
+  auto selective=[](Point a,Point b){
+    for(int j=0;j<=100;++j) {
+      double t=j/100.,x=a.x+t*(b.x-a.x),y=a.y+t*(b.y-a.y);
+      if(x<.999 && y>.001) return false;
+    }
+    return true;
+  };
+  auto mixed=round(two,.45,.01,selective);
+  bool kept_first=false,kept_second=false;
+  for(auto q:mixed) {kept_first|=distance(q,two[1])<1e-9;kept_second|=distance(q,two[2])<1e-9;}
+  check(kept_first && !kept_second);
+  for(size_t i=1;i<mixed.size();++i) check(selective(mixed[i-1],mixed[i]));
   std::cout<<"PASS corner geometry, endpoints, obstacle fallback, hairpin, duplicates\n";
 }
