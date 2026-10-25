@@ -16,6 +16,7 @@ stamp="$(date +%Y%m%d_%H%M%S)"
 diag="$HOME/auto_diag_${stamp}"
 bag_pid=""
 packed=0
+exploration_started=0
 
 collision_params="${diag}_collision_params.yaml"
 controller_params="${diag}_controller_params.yaml"
@@ -61,6 +62,17 @@ finish_recording()
 {
   # Avoid recursively invoking this handler while rosbag is finalized.
   trap - INT TERM
+
+  # The exploration process may already have exited on timeout. Do not rely
+  # on its destructor's asynchronous cancellation surviving ROS shutdown.
+  if [[ "$exploration_started" -eq 1 ]]; then
+    echo "取消本轮未完成的导航目标……"
+    timeout -k 2s -s INT 6s ros2 service call \
+      /navigate_to_pose/_action/cancel_goal action_msgs/srv/CancelGoal \
+      '{goal_info: {stamp: {sec: 0, nanosec: 0}, goal_id: {uuid: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}}}' \
+      >> "$state_log" 2>&1 || echo "警告：取消目标请求未确认；请观察小车，必要时急停。" >&2
+    exploration_started=0
+  fi
 
   if [[ -n "$bag_pid" ]] && kill -0 "$bag_pid" 2>/dev/null; then
     echo "[6/6] 正在停止 rosbag 并写入索引……"
@@ -276,7 +288,8 @@ fi
 
 echo "[3/6] 验证避障传感器和（如启用）VSLAM 的实时消息……"
 if ! require_fresh_sample /scan_filtered "主雷达扫描" ||
-  ! require_fresh_sample /scan_camera "相机高度带扫描"; then
+  ! require_fresh_sample /scan_camera "相机高度带扫描" ||
+  ! require_fresh_sample /scan_camera_safety "相机安全扫描"; then
   finish_recording
   exit 3
 fi
@@ -364,11 +377,14 @@ echo "[4/6] 启动 rosbag……"
 # ros2 bag reads keyboard controls. Redirect stdin so a background recorder is
 # not suspended by an interactive shell with SIGTTIN.
 ros2 bag record \
+  --qos-profile-overrides-path "$HOME/ros2_ws/tools/nav_diag_qos.yaml" \
   --include-hidden-topics \
   -o "$diag" \
   /cmd_vel_nav \
   /cmd_vel \
   /cmd_vel_safe \
+  /cmd_vel_drive \
+  /motion_freshness_guard/status \
   /wheel_feedback \
   /wheel/odom \
   /odometry/filtered \
@@ -416,6 +432,7 @@ fi
 echo "  rosbag 已启动（PID ${bag_pid}）。"
 
 echo "[5/6] 开始自动探索；将在 ${duration} 秒后自动结束，也可按 Ctrl-C 提前结束。"
+exploration_started=1
 timeout -k 10s -s INT "${duration}s" \
   stdbuf -oL -eL ros2 launch my_robot_mapping auto_explore.launch.py \
   2>&1 | tee "$explore_log"
