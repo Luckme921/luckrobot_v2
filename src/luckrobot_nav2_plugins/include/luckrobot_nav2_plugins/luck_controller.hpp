@@ -170,6 +170,10 @@ private:
   double lookahead_dist_{0.35};
   bool use_corner_speed_preview_{true};
   bool use_tracking_gated_cruise_{false};
+  bool use_path_speed_envelope_{false};
+  double debug_legacy_request_{-1.0};
+  double debug_envelope_limit_{-1.0};
+  double debug_envelope_request_{-1.0};
   // A long fixed lookahead cuts across the inside of short planner corners.
   // Blend down to this near-field target only when the near and far path
   // bearings diverge; straight-path behavior remains unchanged.

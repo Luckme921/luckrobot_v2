@@ -1,4 +1,5 @@
 #include "luckrobot_nav2_plugins/corner_speed.hpp"
+#include "luckrobot_nav2_plugins/path_speed_envelope.hpp"
 #include <iostream>
 #include <stdexcept>
 using namespace luckrobot_nav2_plugins::corner_speed;
@@ -38,6 +39,25 @@ int main()
     check(std::abs(fast-limit(dense,s,.40,.80,.35,.25))<1e-8);
   }
   check(limit(left,.70,.40,.70,.35,.25)<.20);
+  namespace env=luckrobot_nav2_plugins::path_speed_envelope;
+  check(env::limit(straight,0,.4,.8,.35,.25)==.4);
+  check(env::limit(left,.95,.4,.8,.35,.25)<.15);
+  for(int i=0;i<180;++i) {
+    double s=i*.01;
+    check(std::abs(env::limit(left,s,.4,.8,.35,.25)-env::limit(right,s,.4,.8,.35,.25))<1e-9);
+    check(std::abs(env::limit(left,s,.4,.8,.35,.25)-env::limit(dense,s,.4,.8,.35,.25))<1e-8);
+  }
+  check(env::blend(.2,.4,0,0)==.25);
+  check(env::blend(.2,.4,.05,0)==.2);
+  check(env::blend(.2,.1,0,0)==.1);
+  std::vector<Point> broad,tight;
+  for(int i=0;i<=400;++i) {
+    double a=i*.01;
+    broad.push_back({std::sin(a),1-std::cos(a)});
+    tight.push_back({.45*std::sin(a),.45*(1-std::cos(a))});
+  }
+  check(env::limit(broad,.6,.4,.8,.35,.25)>.399);
+  check(env::limit(tight,.6,.4,.8,.35,.25)<.301);
   check(std::abs(trackingBoost(0,0)-1.15)<1e-12);
   check(trackingBoost(.03,0)==1.0 && trackingBoost(0,.20)==1.0);
   check(trackingBoost(.01,.1)==trackingBoost(-.01,-.1));

@@ -244,6 +244,7 @@ controller_server:
       plugin: "luckrobot_nav2_plugins/LuckController"
       use_corner_speed_preview: true
       use_tracking_gated_cruise: true
+      use_path_speed_envelope: true
       desired_linear_vel: 0.30
       min_linear_vel: 0.03
       max_angular_vel: 0.35
