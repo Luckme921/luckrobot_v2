@@ -257,6 +257,8 @@ nav_msgs::msg::Path LuckPlanner::createPlan(
   cached_path_ = path;
   cached_goal_ = goal;
   cached_progress_index_ = 0;
+  route_progress_pose_ = start;
+  route_progress_time_ = std::chrono::steady_clock::now();
   lock.unlock();
 
   RCLCPP_DEBUG(
@@ -288,6 +290,26 @@ bool LuckPlanner::buildReusablePath(
   nav_msgs::msg::Path & path)
 {
   if (cached_path_.poses.size() < 2 || !goalsMatch(cached_goal_, goal)) {
+    return false;
+  }
+
+  const auto now = std::chrono::steady_clock::now();
+  const double moved = std::hypot(
+    start.pose.position.x - route_progress_pose_.pose.position.x,
+    start.pose.position.y - route_progress_pose_.pose.position.y);
+  const double yaw_delta = tf2::getYaw(start.pose.orientation) -
+    tf2::getYaw(route_progress_pose_.pose.orientation);
+  const double turned = std::abs(std::atan2(std::sin(yaw_delta), std::cos(yaw_delta)));
+  if (route_progress_time_ == std::chrono::steady_clock::time_point{} ||
+    moved >= 0.03 || turned >= 0.10)
+  {
+    route_progress_pose_ = start;
+    route_progress_time_ = now;
+  } else if (std::chrono::duration<double>(now - route_progress_time_).count() >= 8.0) {
+    // Keep route stability during normal tracking and initial rotation, but
+    // search again after a sustained stall. Do not erase any obstacle or
+    // replenish the controller's per-goal escape budget here.
+    RCLCPP_WARN(logger_, "Route reuse expired after 8 s without pose progress; searching again");
     return false;
   }
 

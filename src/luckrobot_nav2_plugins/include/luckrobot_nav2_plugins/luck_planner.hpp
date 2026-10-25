@@ -2,6 +2,7 @@
 #define LUCKROBOT_NAV2_PLUGINS__LUCK_PLANNER_HPP_
 
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -93,6 +94,10 @@ private:
   double route_reuse_goal_tolerance_{0.15};
   double route_reuse_goal_yaw_tolerance_{0.35};
   double route_reuse_start_tolerance_{0.45};
+  // Wall-clock progress watchdog: paused/slewed ROS time must not keep a
+  // geometrically valid but locally unexecutable route alive forever.
+  std::chrono::steady_clock::time_point route_progress_time_{};
+  geometry_msgs::msg::PoseStamped route_progress_pose_;
   nav_msgs::msg::Path cached_path_;
   geometry_msgs::msg::PoseStamped cached_goal_;
   std::size_t cached_progress_index_{0};

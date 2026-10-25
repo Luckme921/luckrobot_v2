@@ -72,6 +72,21 @@ struct LuckPlannerTestAccess {
     p.costmap_->setCost(30,30,254);
     nav_msgs::msg::Path reused;
     check(!p.buildReusablePath(start,goal,reused));
+    p.costmap_->setCost(30,30,0);
+    p.route_progress_pose_=start;
+    p.route_progress_time_=std::chrono::steady_clock::now();
+    check(p.buildReusablePath(start,goal,reused));
+    p.route_progress_time_=std::chrono::steady_clock::now()-std::chrono::seconds(9);
+    reused.poses.clear();
+    check(!p.buildReusablePath(start,goal,reused));
+    auto progressed=start;progressed.pose.position.x+=.04;
+    check(p.buildReusablePath(progressed,goal,reused));
+    // A deliberate initial turn is progress, not a stalled route.
+    p.route_progress_time_=std::chrono::steady_clock::now()-std::chrono::seconds(9);
+    progressed.pose.orientation.z=std::sin(.2/2);
+    progressed.pose.orientation.w=std::cos(.2/2);
+    reused.poses.clear();
+    check(p.buildReusablePath(progressed,goal,reused));
     std::cout<<"PASS plugin rounding, exact endpoints, unknown fallback, blocked cache segment\n";
   }
 };
