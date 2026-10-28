@@ -1,12 +1,19 @@
 #!/usr/bin/env bash
 
 # Record an automatically synchronized Nav2 / explore_lite diagnostic run.
-# Usage: bash ~/ros2_ws/tools/run_auto_diag.sh [seconds]
+# Usage: bash ~/ros2_ws/tools/run_auto_diag.sh [seconds] [legacy|global]
 
 set -u
 set -o pipefail
 
 duration="${1:-300}"
+backend="${2:-legacy}"
+global_regions=false
+case "$backend" in
+  legacy) ;;
+  global) global_regions=true ;;
+  *) echo "探索后端只能为 legacy 或 global" >&2; exit 2 ;;
+esac
 if ! [[ "$duration" =~ ^[1-9][0-9]*$ ]]; then
   echo "用法：bash ~/ros2_ws/tools/run_auto_diag.sh [正整数秒数]" >&2
   exit 2
@@ -31,6 +38,7 @@ explore_log="${diag}_explore.log"
 : > "$controller_params"
 : > "$planner_params"
 : > "$state_log"
+printf 'exploration_backend=%s\nglobal_regions=%s\n' "$backend" "$global_regions" >> "$state_log"
 : > "$bag_log"
 : > "$explore_log"
 
@@ -168,6 +176,7 @@ require_fresh_sample()
 }
 
 echo "自动探索诊断：${duration} 秒"
+echo "探索后端：${backend}（global 为全局区域候选版；legacy 为原版）"
 echo "输出前缀：${diag}"
 echo "脚本会显示每个阶段；运行阶段没有新日志时仍会持续录包。"
 
@@ -434,7 +443,7 @@ echo "  rosbag 已启动（PID ${bag_pid}）。"
 echo "[5/6] 开始自动探索；将在 ${duration} 秒后自动结束，也可按 Ctrl-C 提前结束。"
 exploration_started=1
 timeout -k 10s -s INT "${duration}s" \
-  stdbuf -oL -eL ros2 launch my_robot_mapping auto_explore.launch.py \
+  stdbuf -oL -eL ros2 launch my_robot_mapping auto_explore.launch.py global_regions:="$global_regions" \
   2>&1 | tee "$explore_log"
 explore_rc=${PIPESTATUS[0]}
 

@@ -62,7 +62,7 @@ def generate_launch_description():
     # 获取包路径
     nav_dir = get_package_share_directory('my_robot_navigation')
     nav2_bringup_dir = get_package_share_directory('nav2_bringup')
-    
+
     # 默认的地图和参数文件路径
     default_map_path = os.path.join(nav_dir, 'maps', 'my_room_map.yaml')
     default_params_path = os.path.join(nav_dir, 'config', 'nav2_params.yaml')
@@ -150,7 +150,8 @@ def generate_launch_description():
         launch_arguments={
             'params_file': configured_params,
             'use_sim_time': use_sim_time,
-            'log_level': log_level
+            'log_level': log_level,
+            'autostart': LaunchConfiguration('navigation_autostart'),
         }.items()
     )
 
@@ -171,6 +172,7 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('navigation_autostart', default_value='true'),
         DeclareLaunchArgument('motion_angular_limit', default_value='0.35',
                               description='Shared tracking yaw cap; candidate upper bound 0.80'),
         DeclareLaunchArgument('motion_speed_limit', default_value='0.30',

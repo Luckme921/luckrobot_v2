@@ -38,3 +38,10 @@ src/OrbbecSDK_ROS2/orbbec_description/
 
 # 忽略奥比中光全部 SDK 库文件（这些千万别传，体积巨大）
 src/OrbbecSDK_ROS2/orbbec_camera/SDK/lib/
+
+# Runtime data and local candidate builds
+map_store/
+maps/
+build_*/
+install_*/
+*.bak_*

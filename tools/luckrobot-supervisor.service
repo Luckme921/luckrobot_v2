@@ -1,0 +1,16 @@
+[Unit]
+Description=LuckRobot ROS mode and launch supervisor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash -c 'source /home/nvidia/ros2_ws/tools/robot_env.sh; exec python3 /home/nvidia/ros2_ws/tools/robot_system_supervisor.py'
+Restart=on-failure
+RestartSec=5
+KillMode=control-group
+KillSignal=SIGINT
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

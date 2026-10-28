@@ -55,6 +55,8 @@ def generate_launch_description():
         ),
         launch_arguments={
             'mode': mode,
+            'start_slam': LaunchConfiguration('start_slam'),
+            'navigation_autostart': LaunchConfiguration('navigation_autostart'),
             'posegraph': posegraph,
             'use_rviz2': use_rviz,
             'use_collision_monitor': use_collision_monitor,
@@ -108,6 +110,8 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        DeclareLaunchArgument('start_slam', default_value='true'),
+        DeclareLaunchArgument('navigation_autostart', default_value='true'),
         DeclareLaunchArgument(
             'mode', default_value='mapping',
             choices=['mapping', 'localization', 'lifelong'],

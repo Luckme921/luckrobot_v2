@@ -26,6 +26,7 @@ add_library(${PROJECT_NAME} SHARED
   src/luck_controller.cpp
   src/luck_planner.cpp
   src/curve_optimizer.cpp
+  src/observed_static_layer.cpp
   src/persistent_camera_layer.cpp
 )
 
@@ -79,6 +80,9 @@ ament_export_dependencies(
 
 if(BUILD_TESTING)
   enable_testing()
+  add_executable(test_observed_static_layer ../../tools/test_observed_static_layer.cpp)
+  target_link_libraries(test_observed_static_layer ${PROJECT_NAME})
+  ament_target_dependencies(test_observed_static_layer nav2_costmap_2d tf2_ros rclcpp_lifecycle)
   add_executable(replay_curve_planner ../../tools/replay_curve_planner.cpp)
   target_link_libraries(replay_curve_planner ${PROJECT_NAME})
   ament_target_dependencies(replay_curve_planner nav2_costmap_2d)

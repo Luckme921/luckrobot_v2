@@ -4,4 +4,7 @@
          base_class_type="nav2_costmap_2d::Layer">
     <description>Retain global camera obstacle cells across SLAM map expansion.</description>
   </class>
+  <class name="luckrobot_nav2_plugins::ObservedStaticLayer" type="luckrobot_nav2_plugins::ObservedStaticLayer" base_class_type="nav2_costmap_2d::Layer">
+    <description>Override historical static occupancy only after repeated finite lidar free-space evidence.</description>
+  </class>
 </library>

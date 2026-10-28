@@ -1,5 +1,8 @@
 import os
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.actions import Node
 from ament_index_python.packages import get_package_share_directory
 
@@ -10,6 +13,9 @@ def generate_launch_description():
         'explore_replan_no_recovery.xml')
 
     return LaunchDescription([
+        DeclareLaunchArgument('global_regions', default_value='false'),
+        DeclareLaunchArgument('shadow_only', default_value='false'),
+        DeclareLaunchArgument('use_sim_time', default_value='false'),
         # 启动 ROS 2 官方前沿探索节点 (Frontier Exploration)
         Node(
             package='explore_lite',
@@ -17,16 +23,22 @@ def generate_launch_description():
             name='explore_node',
             output='screen',
             parameters=[{
+                'global_regions_enabled': ParameterValue(
+                    LaunchConfiguration('global_regions'), value_type=bool),
+                'global_shadow_only': ParameterValue(
+                    LaunchConfiguration('shadow_only'), value_type=bool),
+                'use_sim_time': ParameterValue(
+                    LaunchConfiguration('use_sim_time'), value_type=bool),
                 'robot_base_frame': 'base_footprint',
                 'costmap_topic': '/map',
                 'costmap_updates_topic': '/map_updates',
-                
+
                 'visualize': True,
-                
+
                 # 每 0.5 秒检查一次；目标执行中仍保持锁定。配合专用
                 # 路过点检查器，到点后的下一段通常在 0.05~0.55 秒接续。
                 'planner_frequency': 2.0,
-                
+
                 # 路径预检会先过滤静态不可达目标；平移或正常转向都算
                 # 进展，避免 V5 把起步阶段的 93 度转向误判成卡死。
                 'progress_timeout': 15.0,
@@ -83,7 +95,7 @@ def generate_launch_description():
                 # 终点<=20、路径<=80、车体余量及安全监控不变的条件下，
                 # 增长约41%可减少停车次数，也能跨过0.85m内全是软膨胀
                 # 代价、稍远处才重新出现低代价白区的短通道。
-                'max_goal_step': 1.20,
+                'max_goal_step': 0.80,
                 'branch_weight': 0.75,
                 'branch_match_radius': 1.00,
                 'branch_direction_weight': 0.80,
@@ -152,7 +164,7 @@ def generate_launch_description():
                 # 新路径验证成功才由 Nav2 平滑抢占旧目标；验证失败则
                 # 继续执行旧目标，不随机跳区，也不取消健康运动。
                 'continuous_handoff_enabled': True,
-                'continuous_handoff_distance': 0.45,
+                'continuous_handoff_distance': 0.25,
                 'continuous_handoff_min_goal_age': 2.0,
                 'continuous_handoff_cooldown': 1.5,
                 'continuous_handoff_heading_tolerance': 0.52,
@@ -172,13 +184,13 @@ def generate_launch_description():
                 # 先按距离稳定输入顺序；最终 V10 评分还会加入路径方向、
                 # 父分叉记忆、前沿长度和未知盆地收益，不再是最近点贪心。
                 'near_first': True,
-                
+
                 # 调大距离权重，优先探索眼前的屋子
-                'potential_scale': 5.0,      
-                'orientation_scale': 0.0,    
-                'gain_scale': 1.0,           
-                'transform_tolerance': 0.3,  
-                
+                'potential_scale': 5.0,
+                'orientation_scale': 0.0,
+                'gain_scale': 1.0,
+                'transform_tolerance': 0.3,
+
                 # frontier 是白/灰边界的长度而不是未知区面积。0.30 m
                 # （地图分辨率 0.05 m 时约 6 格）可滤掉零散噪点，同时不会
                 # 错过机器人能够通过的普通门口；安全落脚点与路径预检负责

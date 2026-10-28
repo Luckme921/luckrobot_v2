@@ -32,6 +32,7 @@ def generate_launch_description():
     navigation_dir = get_package_share_directory('my_robot_navigation')
 
     mode = LaunchConfiguration('mode')
+    start_slam = LaunchConfiguration('start_slam')
     posegraph = LaunchConfiguration('posegraph')
     use_rviz = LaunchConfiguration('use_rviz2')
     use_collision_monitor = LaunchConfiguration('use_collision_monitor')
@@ -154,7 +155,7 @@ def generate_launch_description():
         executable='async_slam_toolbox_node',
         name='slam_toolbox',
         output='screen',
-        condition=IfCondition(PythonExpression(["'", mode, "' == 'mapping'"])),
+        condition=IfCondition(PythonExpression(["'", mode, "' == 'mapping' and '", start_slam, "'.lower() == 'true'"])),
         parameters=[
             os.path.join(mapping_dir, 'config', 'mapper_params_online_async.yaml'),
             {'use_sim_time': use_sim_time_param},
@@ -166,7 +167,7 @@ def generate_launch_description():
         executable='localization_slam_toolbox_node',
         name='slam_toolbox',
         output='screen',
-        condition=IfCondition(PythonExpression(["'", mode, "' == 'localization'"])),
+        condition=IfCondition(PythonExpression(["'", mode, "' == 'localization' and '", start_slam, "'.lower() == 'true'"])),
         parameters=[
             os.path.join(mapping_dir, 'config', 'mapper_params_localization.yaml'),
             {
@@ -183,7 +184,7 @@ def generate_launch_description():
         executable='async_slam_toolbox_node',
         name='slam_toolbox',
         output='screen',
-        condition=IfCondition(PythonExpression(["'", mode, "' == 'lifelong'"])),
+        condition=IfCondition(PythonExpression(["'", mode, "' == 'lifelong' and '", start_slam, "'.lower() == 'true'"])),
         parameters=[
             os.path.join(mapping_dir, 'config', 'mapper_params_online_async.yaml'),
             {
@@ -207,6 +208,7 @@ def generate_launch_description():
             # 显式覆盖，防止 none 透传给 Nav2 并导致所有核心节点启动失败。
             'log_level': 'info',
             'navigation_profile': navigation_profile,
+            'navigation_autostart': LaunchConfiguration('navigation_autostart'),
             'motion_speed_limit': motion_speed_limit,
             'motion_angular_limit': LaunchConfiguration('motion_angular_limit'),
         }.items(),
@@ -255,6 +257,8 @@ def generate_launch_description():
         SetEnvironmentVariable('FASTRTPS_DEFAULT_PROFILES_FILE',
                                os.path.join(bringup_dir, 'config', 'fastdds_udp.xml')),
         SetEnvironmentVariable('RMW_FASTRTPS_PUBLICATION_MODE', 'ASYNCHRONOUS'),
+        DeclareLaunchArgument('start_slam', default_value='true'),
+        DeclareLaunchArgument('navigation_autostart', default_value='true'),
         mode_arg,
         posegraph_arg,
         use_rviz_arg,
